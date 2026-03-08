@@ -1,245 +1,364 @@
 "use client";
 
 import type { Candidate } from "@/lib/types";
-import { RotateCcw, ZoomIn, ZoomOut, Box } from "lucide-react";
+import { Box, RotateCcw, ZoomIn, ZoomOut } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 interface ProteinViewerProps {
   candidate: Candidate | null;
 }
 
+function disposeObject(object: unknown) {
+  const typedObject = object as {
+    geometry?: { dispose?: () => void };
+    material?:
+      | { dispose?: () => void }
+      | Array<{ dispose?: () => void }>;
+    children?: unknown[];
+  };
+
+  if (typedObject.geometry?.dispose) {
+    typedObject.geometry.dispose();
+  }
+
+  if (Array.isArray(typedObject.material)) {
+    for (const material of typedObject.material) {
+      material.dispose?.();
+    }
+  } else {
+    typedObject.material?.dispose?.();
+  }
+
+  if (typedObject.children) {
+    for (const child of typedObject.children) {
+      disposeObject(child);
+    }
+  }
+}
+
 export function ProteinViewer({ candidate }: ProteinViewerProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [rotation, setRotation] = useState({ x: 0.3, y: 0 });
-  const [zoom, setZoom] = useState(1);
-  const [isAnimating, setIsAnimating] = useState(true);
+  const mountRef = useRef<HTMLDivElement>(null);
+  const rendererRef = useRef<any>(null);
+  const sceneRef = useRef<any>(null);
+  const cameraRef = useRef<any>(null);
+  const controlsRef = useRef<any>(null);
+  const modelGroupRef = useRef<any>(null);
+  const threeRef = useRef<any>(null);
+  const pdbLoaderRef = useRef<any>(null);
   const animationRef = useRef<number | null>(null);
+  const initialViewRef = useRef<{
+    position: any;
+    target: any;
+    zoom: number;
+  } | null>(null);
+
+  const [isAnimating, setIsAnimating] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const [error, setError] = useState<string | null>(null);
+  const [sourceLabel, setSourceLabel] = useState<string | null>(null);
+
+  const clearModel = () => {
+    const group = modelGroupRef.current;
+    if (!group) return;
+
+    const children = [...group.children];
+    for (const child of children) {
+      group.remove(child);
+      disposeObject(child);
+    }
+  };
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    let cancelled = false;
+    let resizeObserver: ResizeObserver | null = null;
 
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    const initScene = async () => {
+      if (!mountRef.current) return;
 
-    const width = canvas.width;
-    const height = canvas.height;
-    const centerX = width / 2;
-    const centerY = height / 2;
+      const [THREE, { OrbitControls }, { PDBLoader }] =
+        await Promise.all([
+          import("three"),
+          import("three/examples/jsm/controls/OrbitControls.js"),
+          import("three/examples/jsm/loaders/PDBLoader.js"),
+        ]);
 
-    // Generate a procedural protein-like structure based on sequence
-    const generateStructure = (sequence: string) => {
-      const points: Array<{ x: number; y: number; z: number; type: string }> = [];
-      const length = Math.min(sequence?.length || 100, 150);
-      
-      let x = 0, y = 0, z = 0;
-      let angle = 0;
-      let helixPhase = 0;
-      
-      for (let i = 0; i < length; i++) {
-        // Simulate secondary structure (helix, sheet, coil)
-        const structureType = i % 20 < 8 ? "helix" : i % 20 < 14 ? "sheet" : "coil";
-        
-        if (structureType === "helix") {
-          // Alpha helix pattern
-          const helixRadius = 8;
-          const helixPitch = 3;
-          x = helixRadius * Math.cos(helixPhase);
-          y += helixPitch;
-          z = helixRadius * Math.sin(helixPhase);
-          helixPhase += 0.6;
-        } else if (structureType === "sheet") {
-          // Beta sheet - more linear with zigzag
-          x += Math.sin(angle) * 6;
-          y += 4;
-          z += Math.cos(angle) * 2;
-          angle += 0.3;
-        } else {
-          // Random coil
-          x += (Math.random() - 0.5) * 10;
-          y += 3 + Math.random() * 2;
-          z += (Math.random() - 0.5) * 10;
-        }
-        
-        points.push({ x, y: y - length * 1.5, z, type: structureType });
-      }
-      
-      return points;
-    };
+      if (cancelled || !mountRef.current) return;
 
-    const structure = generateStructure(candidate?.sequence || "");
-    
-    const draw = (time: number) => {
-      ctx.fillStyle = "rgba(22, 22, 30, 1)";
-      ctx.fillRect(0, 0, width, height);
+      threeRef.current = THREE;
+      pdbLoaderRef.current = new PDBLoader();
 
-      // Apply rotation
-      const rotX = rotation.x;
-      const rotY = isAnimating ? rotation.y + time * 0.0005 : rotation.y;
-      
-      // Project 3D points to 2D
-      const projected = structure.map((p) => {
-        // Rotate around Y axis
-        const x1 = p.x * Math.cos(rotY) - p.z * Math.sin(rotY);
-        const z1 = p.x * Math.sin(rotY) + p.z * Math.cos(rotY);
-        
-        // Rotate around X axis
-        const y1 = p.y * Math.cos(rotX) - z1 * Math.sin(rotX);
-        const z2 = p.y * Math.sin(rotX) + z1 * Math.cos(rotX);
-        
-        // Perspective projection
-        const scale = (300 * zoom) / (300 + z2);
-        
-        return {
-          x: centerX + x1 * scale,
-          y: centerY + y1 * scale,
-          z: z2,
-          type: p.type,
-          scale,
-        };
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x16161e);
+
+      const width = mountRef.current.clientWidth || 400;
+      const height = mountRef.current.clientHeight || 400;
+
+      const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 2000);
+      camera.position.set(45, 25, 70);
+
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      renderer.setSize(width, height, false);
+      mountRef.current.appendChild(renderer.domElement);
+
+      const controls = new OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.enablePan = true;
+      controls.autoRotate = isAnimating;
+      controls.autoRotateSpeed = 1.1;
+      controls.minDistance = 10;
+      controls.maxDistance = 600;
+
+      const ambient = new THREE.AmbientLight(0xffffff, 0.55);
+      const keyLight = new THREE.DirectionalLight(0xffffff, 0.7);
+      keyLight.position.set(60, 80, 90);
+      const fillLight = new THREE.DirectionalLight(0x88aacc, 0.45);
+      fillLight.position.set(-70, 30, -50);
+
+      const modelGroup = new THREE.Group();
+      scene.add(modelGroup);
+      scene.add(ambient);
+      scene.add(keyLight);
+      scene.add(fillLight);
+
+      rendererRef.current = renderer;
+      sceneRef.current = scene;
+      cameraRef.current = camera;
+      controlsRef.current = controls;
+      modelGroupRef.current = modelGroup;
+
+      const animate = () => {
+        if (cancelled) return;
+        animationRef.current = requestAnimationFrame(animate);
+        controls.update();
+        renderer.render(scene, camera);
+      };
+      animate();
+
+      resizeObserver = new ResizeObserver(() => {
+        if (!mountRef.current) return;
+        const w = mountRef.current.clientWidth || 400;
+        const h = mountRef.current.clientHeight || 400;
+        camera.aspect = w / h;
+        camera.updateProjectionMatrix();
+        renderer.setSize(w, h, false);
       });
-
-      // Sort by z-depth for proper rendering
-      const sortedIndices = projected
-        .map((_, i) => i)
-        .sort((a, b) => projected[b].z - projected[a].z);
-
-      // Draw connections (backbone)
-      ctx.lineWidth = 3 * zoom;
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-      
-      for (let i = 1; i < sortedIndices.length; i++) {
-        const idx = sortedIndices[i];
-        if (idx === 0) continue;
-        
-        const curr = projected[idx];
-        const prev = projected[idx - 1];
-        
-        // Color based on structure type
-        let color: string;
-        if (structure[idx].type === "helix") {
-          color = `rgba(45, 212, 191, ${0.4 + curr.scale * 0.2})`; // Teal for helix
-        } else if (structure[idx].type === "sheet") {
-          color = `rgba(250, 204, 21, ${0.4 + curr.scale * 0.2})`; // Yellow for sheet
-        } else {
-          color = `rgba(148, 163, 184, ${0.3 + curr.scale * 0.15})`; // Gray for coil
-        }
-        
-        ctx.strokeStyle = color;
-        ctx.beginPath();
-        ctx.moveTo(prev.x, prev.y);
-        ctx.lineTo(curr.x, curr.y);
-        ctx.stroke();
-      }
-
-      // Draw FP insertion site highlight
-      if (candidate?.insertionPosition) {
-        const insertIdx = Math.min(
-          candidate.insertionPosition,
-          projected.length - 1
-        );
-        const insertPoint = projected[insertIdx];
-        if (insertPoint) {
-          // Glow effect
-          const gradient = ctx.createRadialGradient(
-            insertPoint.x,
-            insertPoint.y,
-            0,
-            insertPoint.x,
-            insertPoint.y,
-            20 * insertPoint.scale
-          );
-          gradient.addColorStop(0, "rgba(34, 211, 238, 0.8)");
-          gradient.addColorStop(0.5, "rgba(34, 211, 238, 0.3)");
-          gradient.addColorStop(1, "rgba(34, 211, 238, 0)");
-          
-          ctx.fillStyle = gradient;
-          ctx.beginPath();
-          ctx.arc(insertPoint.x, insertPoint.y, 20 * insertPoint.scale, 0, Math.PI * 2);
-          ctx.fill();
-          
-          // Core point
-          ctx.fillStyle = "#22d3ee";
-          ctx.beginPath();
-          ctx.arc(insertPoint.x, insertPoint.y, 6 * insertPoint.scale, 0, Math.PI * 2);
-          ctx.fill();
-        }
-      }
-
-      // Draw legend
-      ctx.font = "10px system-ui";
-      ctx.fillStyle = "#94a3b8";
-      ctx.fillText("Structure:", 10, height - 45);
-      
-      ctx.fillStyle = "#2dd4bf";
-      ctx.fillRect(10, height - 35, 12, 12);
-      ctx.fillStyle = "#94a3b8";
-      ctx.fillText("Helix", 26, height - 25);
-      
-      ctx.fillStyle = "#facc15";
-      ctx.fillRect(60, height - 35, 12, 12);
-      ctx.fillStyle = "#94a3b8";
-      ctx.fillText("Sheet", 76, height - 25);
-      
-      ctx.fillStyle = "#64748b";
-      ctx.fillRect(115, height - 35, 12, 12);
-      ctx.fillStyle = "#94a3b8";
-      ctx.fillText("Coil", 131, height - 25);
-      
-      if (candidate?.insertionPosition) {
-        ctx.fillStyle = "#22d3ee";
-        ctx.beginPath();
-        ctx.arc(180, height - 29, 5, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = "#94a3b8";
-        ctx.fillText("FP Site", 190, height - 25);
-      }
-
-      if (isAnimating) {
-        animationRef.current = requestAnimationFrame(draw);
-      }
+      resizeObserver.observe(mountRef.current);
     };
 
-    animationRef.current = requestAnimationFrame(draw);
+    initScene();
 
     return () => {
+      cancelled = true;
+      resizeObserver?.disconnect();
+
       if (animationRef.current) {
         cancelAnimationFrame(animationRef.current);
+        animationRef.current = null;
       }
-    };
-  }, [candidate, rotation, zoom, isAnimating]);
 
-  const handleZoomIn = () => setZoom((z) => Math.min(z + 0.2, 2));
-  const handleZoomOut = () => setZoom((z) => Math.max(z - 0.2, 0.5));
+      controlsRef.current?.dispose?.();
+      clearModel();
+
+      if (sceneRef.current) {
+        disposeObject(sceneRef.current);
+      }
+
+      if (rendererRef.current) {
+        rendererRef.current.dispose?.();
+        const dom = rendererRef.current.domElement as HTMLElement | undefined;
+        if (dom && dom.parentElement) {
+          dom.parentElement.removeChild(dom);
+        }
+      }
+
+      rendererRef.current = null;
+      sceneRef.current = null;
+      cameraRef.current = null;
+      controlsRef.current = null;
+      modelGroupRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (controlsRef.current) {
+      controlsRef.current.autoRotate = isAnimating;
+    }
+  }, [isAnimating]);
+
+  useEffect(() => {
+    const loader = pdbLoaderRef.current;
+    const THREE = threeRef.current;
+    const group = modelGroupRef.current;
+    const camera = cameraRef.current;
+    const controls = controlsRef.current;
+    const renderer = rendererRef.current;
+    const scene = sceneRef.current;
+    if (!loader || !THREE || !group || !camera || !controls || !renderer || !scene) {
+      return;
+    }
+
+    clearModel();
+    setError(null);
+    setSourceLabel(null);
+
+    if (!candidate) {
+      return;
+    }
+
+    const pdbUrl = candidate.pdbData || `/api/pdb?candidateId=${encodeURIComponent(candidate.id)}`;
+    setIsLoading(true);
+
+    loader.load(
+      pdbUrl,
+      (result: any) => {
+        clearModel();
+
+        const atoms = new THREE.Points(
+          result.geometryAtoms,
+          new THREE.PointsMaterial({
+            size: 0.32,
+            vertexColors: true,
+            transparent: true,
+            opacity: 0.95,
+            sizeAttenuation: true,
+          })
+        );
+
+        const bonds = new THREE.LineSegments(
+          result.geometryBonds,
+          new THREE.LineBasicMaterial({
+            color: 0x8a94a5,
+            transparent: true,
+            opacity: 0.36,
+          })
+        );
+
+        group.add(bonds);
+        group.add(atoms);
+
+        const atomRecords = Array.isArray(result.json?.atoms) ? result.json.atoms : [];
+        if (atomRecords.length > 0 && candidate.insertionPosition) {
+          const insertionPositions: number[] = [];
+          for (const atom of atomRecords) {
+            if (Number(atom?.resi) === candidate.insertionPosition) {
+              insertionPositions.push(atom.x, atom.y, atom.z);
+            }
+          }
+
+          if (insertionPositions.length > 0) {
+            const highlightGeometry = new THREE.BufferGeometry();
+            highlightGeometry.setAttribute(
+              "position",
+              new THREE.Float32BufferAttribute(insertionPositions, 3)
+            );
+            const highlight = new THREE.Points(
+              highlightGeometry,
+              new THREE.PointsMaterial({
+                color: 0x22d3ee,
+                size: 0.6,
+                transparent: true,
+                opacity: 0.95,
+              })
+            );
+            group.add(highlight);
+          }
+        }
+
+        const box = new THREE.Box3().setFromObject(group);
+        if (!box.isEmpty()) {
+          const center = box.getCenter(new THREE.Vector3());
+          const size = box.getSize(new THREE.Vector3()).length();
+          const distance = Math.max(size * 0.85, 40);
+
+          camera.near = 0.1;
+          camera.far = Math.max(1500, distance * 8);
+          camera.position.set(
+            center.x + distance * 0.24,
+            center.y + distance * 0.18,
+            center.z + distance
+          );
+          camera.zoom = 1;
+          camera.updateProjectionMatrix();
+
+          controls.target.copy(center);
+          controls.update();
+
+          initialViewRef.current = {
+            position: camera.position.clone(),
+            target: controls.target.clone(),
+            zoom: camera.zoom,
+          };
+          setZoom(camera.zoom);
+        }
+
+        renderer.render(scene, camera);
+        setSourceLabel(pdbUrl);
+        setIsLoading(false);
+      },
+      undefined,
+      (loadError: unknown) => {
+        clearModel();
+        const message =
+          loadError instanceof Error
+            ? loadError.message
+            : "Unable to load PDB structure";
+        setError(message);
+        setIsLoading(false);
+      }
+    );
+  }, [candidate]);
+
+  const updateZoom = (multiplier: number) => {
+    const camera = cameraRef.current;
+    if (!camera) return;
+    const nextZoom = Math.max(0.35, Math.min(4, camera.zoom * multiplier));
+    camera.zoom = nextZoom;
+    camera.updateProjectionMatrix();
+    setZoom(nextZoom);
+  };
+
   const handleReset = () => {
-    setZoom(1);
-    setRotation({ x: 0.3, y: 0 });
+    const camera = cameraRef.current;
+    const controls = controlsRef.current;
+    const initialView = initialViewRef.current;
+    if (!camera || !controls || !initialView) return;
+
+    camera.position.copy(initialView.position);
+    camera.zoom = initialView.zoom;
+    camera.updateProjectionMatrix();
+    controls.target.copy(initialView.target);
+    controls.update();
+    setZoom(initialView.zoom);
   };
 
   return (
     <div className="bg-card border border-border rounded-lg overflow-hidden">
       <div className="px-4 py-3 border-b border-border flex items-center justify-between">
         <div>
-          <h2 className="text-sm font-semibold text-foreground">
-            3D Structure Preview
-          </h2>
+          <h2 className="text-sm font-semibold text-foreground">3D Structure Preview</h2>
           <p className="text-xs text-muted-foreground mt-0.5">
             {candidate
-              ? `Predicted fold for ${candidate.id}`
+              ? `Three.js PDB view for ${candidate.id}`
               : "Select a candidate to view"}
           </p>
+          {sourceLabel && (
+            <p className="text-[11px] text-muted-foreground/80 mt-0.5 font-mono">
+              {sourceLabel}
+            </p>
+          )}
         </div>
         <div className="flex items-center gap-1">
           <button
-            onClick={handleZoomOut}
+            onClick={() => updateZoom(0.84)}
             className="p-1.5 rounded-md hover:bg-secondary transition-colors"
             aria-label="Zoom out"
           >
             <ZoomOut className="w-4 h-4 text-muted-foreground" />
           </button>
           <button
-            onClick={handleZoomIn}
+            onClick={() => updateZoom(1.2)}
             className="p-1.5 rounded-md hover:bg-secondary transition-colors"
             aria-label="Zoom in"
           >
@@ -253,7 +372,7 @@ export function ProteinViewer({ candidate }: ProteinViewerProps) {
             <RotateCcw className="w-4 h-4 text-muted-foreground" />
           </button>
           <button
-            onClick={() => setIsAnimating(!isAnimating)}
+            onClick={() => setIsAnimating((prev) => !prev)}
             className={`p-1.5 rounded-md transition-colors ${
               isAnimating ? "bg-primary/20 text-primary" : "hover:bg-secondary"
             }`}
@@ -268,17 +387,26 @@ export function ProteinViewer({ candidate }: ProteinViewerProps) {
         </div>
       </div>
       <div className="relative aspect-square bg-[#16161e]">
-        <canvas
-          ref={canvasRef}
-          width={400}
-          height={400}
-          className="w-full h-full"
-        />
+        <div ref={mountRef} className="absolute inset-0" />
+        <div className="absolute top-2 right-2 px-2 py-1 rounded bg-black/35 text-[10px] text-muted-foreground">
+          zoom {zoom.toFixed(2)}x
+        </div>
+
         {!candidate && (
           <div className="absolute inset-0 flex items-center justify-center">
-            <p className="text-sm text-muted-foreground">
-              No candidate selected
-            </p>
+            <p className="text-sm text-muted-foreground">No candidate selected</p>
+          </div>
+        )}
+
+        {isLoading && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black/20">
+            <p className="text-sm text-muted-foreground">Loading PDB structure...</p>
+          </div>
+        )}
+
+        {error && (
+          <div className="absolute inset-0 flex items-center justify-center px-6">
+            <p className="text-sm text-destructive text-center">{error}</p>
           </div>
         )}
       </div>
