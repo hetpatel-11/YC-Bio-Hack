@@ -57,6 +57,7 @@ export function ProteinViewer({ candidate }: ProteinViewerProps) {
   const [zoom, setZoom] = useState(1);
   const [error, setError] = useState<string | null>(null);
   const [sourceLabel, setSourceLabel] = useState<string | null>(null);
+  const [sceneReady, setSceneReady] = useState(false);
 
   const clearModel = () => {
     const group = modelGroupRef.current;
@@ -145,6 +146,7 @@ export function ProteinViewer({ candidate }: ProteinViewerProps) {
         renderer.setSize(w, h, false);
       });
       resizeObserver.observe(mountRef.current);
+      if (!cancelled) setSceneReady(true);
     };
 
     initScene();
@@ -203,13 +205,7 @@ export function ProteinViewer({ candidate }: ProteinViewerProps) {
     setError(null);
     setSourceLabel(null);
 
-    if (candidate && !candidate.pdbData) {
-      setIsLoading(false);
-      setError("No candidate-specific PDB file yet. Wait for ESMFold/AF2 output.");
-      return;
-    }
-
-    const pdbUrl = candidate ? candidate.pdbData : "/api/pdb";
+    const pdbUrl = candidate?.pdbData ?? "/api/pdb";
     setIsLoading(true);
 
     loader.load(
@@ -311,7 +307,7 @@ export function ProteinViewer({ candidate }: ProteinViewerProps) {
         setIsLoading(false);
       }
     );
-  }, [candidate]);
+  }, [candidate, sceneReady]);
 
   const updateZoom = (multiplier: number) => {
     const camera = cameraRef.current;

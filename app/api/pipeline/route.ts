@@ -363,6 +363,28 @@ function buildInsertionSites(candidates: Candidate[]): InsertionSite[] {
     .slice(0, 8);
 }
 
+async function buildCachePlddt(): Promise<Map<string, { plddt: number; pdbFile?: string; seqHash?: string }>> {
+  const map = new Map<string, { plddt: number; pdbFile?: string; seqHash?: string }>();
+  const cacheFile = path.join(RESULTS_DIR, "tamarind_cache.json");
+  try {
+    const raw = await fs.readFile(cacheFile, "utf8");
+    const cache = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+    for (const [key, val] of Object.entries(cache)) {
+      const seq = key.split("::")[1];
+      if (seq && typeof val.plddt === "number") {
+        map.set(seq, {
+          plddt: val.plddt,
+          pdbFile: typeof val.pdb_file === "string" ? val.pdb_file : undefined,
+          seqHash: typeof val.seq_hash === "string" ? val.seq_hash : undefined,
+        });
+      }
+    }
+  } catch {
+    // cache not yet available
+  }
+  return map;
+}
+
 async function buildDashboardData() {
   const [
     { candidates: fileCandidates, sourceFile: fileSource },
@@ -370,6 +392,7 @@ async function buildDashboardData() {
     callCounter,
     esmfoldSummary,
     runningState,
+    cachePlddt,
   ] =
     await Promise.all([
       readRawCandidates(),
@@ -379,6 +402,7 @@ async function buildDashboardData() {
         path.join(RESULTS_DIR, "esmfold_results.json")
       ),
       isPipelineRunning(),
+      buildCachePlddt(),
     ]);
 
   const runEvents = latestRun.events;
@@ -400,8 +424,9 @@ async function buildDashboardData() {
       : null;
     const chains = Array.isArray(raw.chains) ? raw.chains : [];
     const sequence = firstString([raw.sequence, chains[0]]) ?? "";
+    const cached = cachePlddt.get(sequence);
     const localFitness = toUnit(raw.local_fitness ?? raw.localFitness ?? raw.fitness);
-    const plddt = toUnit(raw.plddt);
+    const plddt = toUnit(raw.plddt) || (cached ? toUnit(cached.plddt) : 0);
     const iptm = toUnit(raw.iptm);
     const ptm = toUnit(raw.ptm);
     const fpName = firstString([raw.fp_name, raw.fpName]) ?? "cpGFP";
@@ -416,6 +441,7 @@ async function buildDashboardData() {
       rawNested?.pdb_file,
       rawNested?.pdb_path,
       rawNested?.pdbFile,
+      cached?.pdbFile,
     ]);
 
     return {
