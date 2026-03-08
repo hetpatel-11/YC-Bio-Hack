@@ -11,9 +11,11 @@ BUDGET: ~100 calls total. This module enforces a hard stop at MAX_CALLS.
 Never call from inside a search loop — only from post-GA batch steps.
 """
 
+import io
 import json
 import os
 import time
+import zipfile
 from pathlib import Path
 
 import requests
@@ -150,24 +152,73 @@ def _poll(job_name: str) -> dict:
     raise TimeoutError(f"Tamarind job '{job_name}' timed out after {POLL_TIMEOUT * POLL_INTERVAL}s")
 
 
+def _download_pdb(job_name: str) -> str | None:
+    """
+    POST /result → signed S3 ZIP URL → download ZIP → extract PDB string.
+
+    Tamarind /result returns a quoted URL string (not JSON object).
+    The ZIP contains files like 'result.pdb', '<job>.pdb', or similar.
+    Also saves PDB to results/pdb/<job_name>.pdb for the dashboard.
+    Returns the PDB string or None on failure.
+    """
+    try:
+        resp = requests.post(
+            f"{BASE_URL}/result",
+            json={"jobName": job_name},
+            headers=_headers(),
+            timeout=30,
+        )
+        resp.raise_for_status()
+
+        # Response is a quoted URL string, e.g. '"https://downloads.tamarind.bio/..."'
+        url = resp.text.strip().strip('"')
+        if not url.startswith("http"):
+            print(f"[tamarind] /result did not return a URL: {url[:80]}")
+            return None
+
+        # Download the ZIP
+        zip_resp = requests.get(url, timeout=120)
+        zip_resp.raise_for_status()
+
+        # Extract PDB from ZIP
+        pdb_string = None
+        with zipfile.ZipFile(io.BytesIO(zip_resp.content)) as zf:
+            for name in zf.namelist():
+                if name.endswith(".pdb"):
+                    pdb_string = zf.read(name).decode("utf-8", errors="replace")
+                    print(f"[tamarind] extracted PDB '{name}' ({len(pdb_string)} chars)")
+                    break
+
+        if pdb_string is None:
+            print(f"[tamarind] no .pdb file found in ZIP for job '{job_name}'")
+            print(f"[tamarind] ZIP contents: {zf.namelist()}")
+            return None
+
+        # Save to disk for dashboard / 3D viewer
+        pdb_dir = CACHE_FILE.parent / "pdb"
+        pdb_dir.mkdir(parents=True, exist_ok=True)
+        (pdb_dir / f"{job_name}.pdb").write_text(pdb_string)
+        print(f"[tamarind] PDB saved to results/pdb/{job_name}.pdb")
+        return pdb_string
+
+    except Exception as e:
+        print(f"[tamarind] WARNING: PDB download failed for '{job_name}': {e}")
+        return None
+
+
 def _get_result(job: dict) -> dict:
     """
-    Extract structured result from a completed job dict.
-    Score is already embedded in the job as job['_score'] (parsed from Score JSON).
-    Falls back to POST /result if Score field is missing.
+    Return the score dict for a completed job AND download the PDB.
+
+    Score fields come from job['_score'] (already parsed from the Score JSON
+    embedded in the GET /jobs response).
+    PDB is fetched separately via POST /result → signed S3 ZIP URL.
     """
-    if "_score" in job:
-        return job["_score"]
-    # Fallback: POST /result
+    score = job.get("_score", {})
     job_name = job.get("JobName") or job.get("jobName", "")
-    resp = requests.post(
-        f"{BASE_URL}/result",
-        json={"jobName": job_name},
-        headers=_headers(),
-        timeout=30,
-    )
-    resp.raise_for_status()
-    return resp.json()
+    pdb = _download_pdb(job_name)
+    score["pdb"] = pdb
+    return score
 
 
 def _run_job(job_name: str, job_type: str, settings: dict) -> dict:
@@ -197,11 +248,14 @@ def esmfold_plddt(sequence: str) -> dict:
     result = _run_job(job_name, "esmfold", {"sequence": sequence})
 
     # Tamarind ESMFold Score fields (verified): plddt, ptm, num_recycles, chain_linker
+    # PDB is fetched from the signed S3 ZIP URL and saved to results/pdb/<job_name>.pdb
     output = {
-        "plddt": result.get("plddt") or result.get("plddt_mean") or result.get("avg_plddt"),
-        "ptm":   result.get("ptm"),
-        "pdb":   result.get("pdb") or result.get("pdbFile") or result.get("pdb_string"),
-        "raw":   result,
+        "plddt":    result.get("plddt") or result.get("plddt_mean") or result.get("avg_plddt"),
+        "ptm":      result.get("ptm"),
+        "pdb":      result.get("pdb"),          # PDB string, populated by _get_result
+        "pdb_file": f"results/pdb/{job_name}.pdb",   # path on disk for dashboard
+        "seq_hash": job_name,                   # lookup key for /api/structure endpoint
+        "raw":      result,
     }
     cache[key] = output
     _save_cache(cache)
@@ -231,16 +285,16 @@ def alphafold2_multimer(chains: list[str], num_models: int = 5) -> dict:
     }
     result = _run_job(job_name, "alphafold", settings)
 
-    # Tamarind may return a list of models ranked by quality; take rank-1
-    models = result.get("models") or [result]
-    best = models[0] if models else result
-
+    # AF2 Score fields: plddt, ptm, iptm (verified against Tamarind docs pattern)
+    # PDB fetched from signed S3 ZIP and saved to results/pdb/<job_name>.pdb
     output = {
-        "plddt": best.get("plddt") or best.get("plddt_mean") or best.get("avg_plddt"),
-        "ptm":   best.get("ptm"),
-        "iptm":  best.get("iptm"),
-        "pdb":   best.get("pdb") or best.get("pdbFile"),
-        "raw":   result,
+        "plddt":    result.get("plddt") or result.get("plddt_mean") or result.get("avg_plddt"),
+        "ptm":      result.get("ptm"),
+        "iptm":     result.get("iptm"),
+        "pdb":      result.get("pdb"),          # PDB string from ZIP download
+        "pdb_file": f"results/pdb/{job_name}.pdb",
+        "seq_hash": job_name,
+        "raw":      result,
     }
     cache[key] = output
     _save_cache(cache)

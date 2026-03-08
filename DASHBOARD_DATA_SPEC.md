@@ -117,31 +117,57 @@ Each value:
 
 ## 3. PDB Structures — How to Get Them
 
-### Where PDB strings are stored
+### How Tamarind returns PDB files (verified)
 
-Tamarind returns PDB text in the `Score` field of the job. Our wrapper
-extracts it and stores it in `results/tamarind_cache.json` under the
-`"pdb"` key of each cache entry.
+The Tamarind result flow has **two separate responses**:
 
-**Note:** The live ESMFold result currently has `pdb: null` because
-the `Score` JSON from Tamarind didn't include a PDB string — only
-`plddt`, `ptm`, `num_recycles`. The full PDB may require the `/result`
-endpoint or a separate download URL (to be confirmed with Tamarind docs).
+1. **`GET /jobs`** → `Score` field (JSON string) contains scores only:
+   `{ "plddt": 59.4, "ptm": 0.561, "num_recycles": 3, "chain_linker": 25 }` — **no PDB**
+
+2. **`POST /result`** → returns a **signed S3 URL** (quoted string) to a ZIP file.
+   The ZIP contains `model.pdb` (or `<jobname>.pdb`). This is the actual structure.
+
+Our wrapper (`scorers/tamarind.py:_download_pdb`) handles this automatically:
+- Downloads the ZIP from the S3 URL
+- Extracts the `.pdb` file
+- Saves it to `results/pdb/<job_name>.pdb` on disk
+- Stores the PDB string in `results/tamarind_cache.json` under the `"pdb"` key
+
+### PDB file index
+
+Each completed job produces:
+
+| Location | Contents |
+|---|---|
+| `results/pdb/<job_name>.pdb` | Full PDB file on disk (e.g. `esmfold_93643045.pdb`) |
+| `results/tamarind_cache.json` → `["pdb"]` | Same PDB as string in JSON |
+| `results/tamarind_cache.json` → `["pdb_file"]` | Relative path string `"results/pdb/<job>.pdb"` |
+| `results/tamarind_cache.json` → `["seq_hash"]` | Job name = lookup key (e.g. `"esmfold_93643045"`) |
+
+**Verified PDB stats** (WT chimeric SSTR2-cpGFP, 600 AA):
+- 4700 ATOM records, 600 Cα atoms, single chain A, residues 1–600
+- File size: ~380 KB
 
 ### How to serve PDB to the viewer
 
-Option A — Read from cache file directly (local dev):
+**Option A — Serve the file directly** (fastest, local dev):
 ```js
-// In your API route or backend
-const cache = JSON.parse(fs.readFileSync('results/tamarind_cache.json'))
-const key = `esmfold::${sequence}::{}`
-const pdb = cache[key]?.pdb   // string or null
+// Express route
+app.get('/api/structure/:jobname', (req, res) => {
+  const pdbPath = path.join('results', 'pdb', `${req.params.jobname}.pdb`)
+  res.setHeader('Content-Type', 'text/plain')
+  res.sendFile(path.resolve(pdbPath))
+})
 ```
 
-Option B — Expose a `/api/structure/:hash` endpoint that:
-1. Reads the cache
-2. Looks up the sequence by hash (first 8 chars of `abs(hash(sequence)) % 10**8`)
-3. Returns the PDB string as `text/plain`
+**Option B — Read from JSON cache** (works if files not on same server):
+```js
+const cache = JSON.parse(fs.readFileSync('results/tamarind_cache.json'))
+const key = `esmfold::${sequence}::{}`
+const pdb = cache[key]?.pdb      // full PDB string
+const file = cache[key]?.pdb_file // "results/pdb/esmfold_93643045.pdb"
+const hash = cache[key]?.seq_hash // "esmfold_93643045"
+```
 
 ### 3D viewer integration (Molstar / py3Dmol / NGL)
 
@@ -267,15 +293,36 @@ def pareto():
     p = RESULTS / "pareto.json"
     return json.loads(p.read_text()) if p.exists() else {}
 
-@app.get("/api/structure/{seq_hash}", response_class=PlainTextResponse)
-def structure(seq_hash: str):
+@app.get("/api/structure/{job_name}", response_class=PlainTextResponse)
+def structure(job_name: str):
+    """Serve PDB file by job name (e.g. 'esmfold_93643045' or 'af2multi_12345678')."""
+    pdb_path = RESULTS / "pdb" / f"{job_name}.pdb"
+    if pdb_path.exists():
+        return pdb_path.read_text()
+    # Fallback: read from cache JSON
     cache = json.loads((RESULTS / "tamarind_cache.json").read_text())
-    for key, val in cache.items():
-        # key format: "esmfold::<sequence>::{}"
-        seq = key.split("::")[1]
-        if str(abs(hash(seq)) % 10**8) == seq_hash and val.get("pdb"):
+    for val in cache.values():
+        if val.get("seq_hash") == job_name and val.get("pdb"):
             return val["pdb"]
     return ""
+
+@app.get("/api/structures")
+def list_structures():
+    """List all available PDB files with their job names and scores."""
+    cache = json.loads((RESULTS / "tamarind_cache.json").read_text())
+    result = []
+    for key, val in cache.items():
+        tool = key.split("::")[0]   # "esmfold" or "alphafold2_multimer"
+        result.append({
+            "job_name": val.get("seq_hash"),
+            "tool":     tool,
+            "plddt":    val.get("plddt"),
+            "ptm":      val.get("ptm"),
+            "iptm":     val.get("iptm"),
+            "pdb_file": val.get("pdb_file"),
+            "has_pdb":  val.get("pdb") is not None,
+        })
+    return result
 
 @app.get("/api/summary", response_class=PlainTextResponse)
 def summary():
