@@ -7,7 +7,7 @@ export const runtime = "nodejs";
 type RawCandidate = Record<string, unknown>;
 
 const RESULTS_DIR = path.join(process.cwd(), "results");
-const CANDIDATE_FILES = ["top5.json", "af2_results.json", "test_run.json"];
+const CANDIDATE_FILES = ["top5.json", "af2_results.json"];
 const STRUCTURE_EXTENSIONS = new Set([".pdb", ".ent"]);
 
 async function exists(filePath: string) {
@@ -75,6 +75,8 @@ function extractPdbText(candidate: RawCandidate) {
 async function readPdbFromPath(pathValue: string) {
   const candidatePath = path.isAbsolute(pathValue)
     ? pathValue
+    : pathValue.startsWith("results/")
+    ? path.resolve(process.cwd(), pathValue)
     : path.resolve(RESULTS_DIR, pathValue);
   const resolved = path.resolve(candidatePath);
   const allowedPrefix = `${path.resolve(RESULTS_DIR)}${path.sep}`;
@@ -176,7 +178,11 @@ export async function GET(request: NextRequest) {
         });
       }
 
-      const pdbPath = firstString([candidate.pdb_path, candidate.pdbFile, candidate.pdbData]);
+      const pdbPath = firstString([
+        candidate.pdb_file,
+        candidate.pdb_path,
+        candidate.pdbFile,
+      ]);
       if (pdbPath) {
         const fileText = await readPdbFromPath(pdbPath);
         if (fileText) {

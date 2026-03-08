@@ -203,9 +203,13 @@ export function ProteinViewer({ candidate }: ProteinViewerProps) {
     setError(null);
     setSourceLabel(null);
 
-    const pdbUrl = candidate
-      ? candidate.pdbData || `/api/pdb?candidateId=${encodeURIComponent(candidate.id)}`
-      : "/api/pdb";
+    if (candidate && !candidate.pdbData) {
+      setIsLoading(false);
+      setError("No candidate-specific PDB file yet. Wait for ESMFold/AF2 output.");
+      return;
+    }
+
+    const pdbUrl = candidate ? candidate.pdbData : "/api/pdb";
     setIsLoading(true);
 
     loader.load(

@@ -382,6 +382,7 @@ async function buildDashboardData() {
     ]);
 
   const runEvents = latestRun.events;
+  const usingFileCandidates = fileCandidates.length > 0;
   const fallbackCandidates = fileCandidates.length === 0
     ? buildCandidatesFromRunEvents(runEvents)
     : [];
@@ -394,6 +395,9 @@ async function buildDashboardData() {
       : null;
 
   const candidatesBase = rawCandidates.map((raw, index) => {
+    const rawNested = raw.raw && typeof raw.raw === "object"
+      ? (raw.raw as Record<string, unknown>)
+      : null;
     const chains = Array.isArray(raw.chains) ? raw.chains : [];
     const sequence = firstString([raw.sequence, chains[0]]) ?? "";
     const localFitness = toUnit(raw.local_fitness ?? raw.localFitness ?? raw.fitness);
@@ -405,6 +409,14 @@ async function buildDashboardData() {
     const candidateId =
       firstString([raw.id, raw.candidateId, raw.candidate_id]) ??
       `cand-${String(index + 1).padStart(3, "0")}`;
+    const pdbFile = firstString([
+      raw.pdb_file,
+      raw.pdb_path,
+      raw.pdbFile,
+      rawNested?.pdb_file,
+      rawNested?.pdb_path,
+      rawNested?.pdbFile,
+    ]);
 
     return {
       id: candidateId,
@@ -422,7 +434,11 @@ async function buildDashboardData() {
         ptm,
         iptm,
       },
-      pdbData: `/api/pdb?candidateId=${encodeURIComponent(candidateId)}`,
+      pdbData: pdbFile
+        ? `/api/pdb?file=${encodeURIComponent(pdbFile)}`
+        : usingFileCandidates
+        ? `/api/pdb?candidateId=${encodeURIComponent(candidateId)}`
+        : undefined,
       isOnParetoFront: false,
     } satisfies Candidate;
   });
