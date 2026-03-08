@@ -37,12 +37,12 @@ ICL3_INSERT_RANGE = (206, 250)   # (inclusive start, inclusive end)
 # These index into the 369-AA receptor; chimeric positions are computed
 # per-individual via Individual.mutable_positions.
 _BARE_LOOP_POSITIONS: list[int] = (
-    list(range(82, 89))     # ECL1   residues  83– 89
-    + list(range(116, 124)) # ICL2   residues 117–124
-    + list(range(148, 173)) # ECL2   residues 149–173
-    + list(range(204, 252)) # ICL3   residues 205–252
-    + list(range(280, 287)) # ECL3   residues 281–287
-    + list(range(313, 369)) # C-tail residues 314–369
+    list(range(104, 111))     # ECL1   residues  83– 89
+    + list(range(139, 161)) # ICL2   residues 117–124
+    + list(range(182, 207)) # ECL2   residues 149–173
+    + list(range(230, 253)) # ICL3   residues 205–252
+    + list(range(279, 288)) # ECL3   residues 281–287
+    + list(range(304, 369)) # C-tail residues 314–369
 )
 
 LOCAL_WEIGHT = 0.35

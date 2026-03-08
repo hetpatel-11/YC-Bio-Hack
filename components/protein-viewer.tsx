@@ -297,7 +297,7 @@ export function ProteinViewer({ candidate }: ProteinViewerProps) {
         }
 
         renderer.render(scene, camera);
-        setSourceLabel(pdbUrl);
+        setSourceLabel(pdbUrl ?? null);
         setIsLoading(false);
       },
       undefined,
