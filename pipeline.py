@@ -6,21 +6,23 @@ Run:
 
 Budget: ~100 Tamarind calls total.
 
-Feedback loop (3 rounds):
-  Round 1: GA (30 pop × 40 gen) → ESMFold top-20       (~20 calls)
-  Round 2: GA seeded from survivors + pLDDT feedback
-           → ESMFold new top-15 (deduped)               (~15 calls)
-  Round 3: GA seeded from all survivors + pLDDT feedback
-           → ESMFold new top-10 (deduped)               (~10 calls)
+Feedback loop:
+  Round 1: GA (30 pop × 40 gen) → ESMFold top-5        (~5 calls)
   WT baseline ESMFold (for RMSD reference)              (~1 call)
-  AF2 multimer top-5                                    (~40 calls)
+  AF2 multimer top-5 [chimeric + somatostatin ligand]   (~5 calls)
   ─────────────────────────────────────────────────────────────────
-  Total                                                 ~86 calls
+  Total                                                 ~11 calls
 
 GA co-evolves:
   - SSTR2 loop residues (ECL1/2/3, ICL2/3, C-tail)
   - N- and C-linker sequence + length (5–10 AA each)
   - Insertion position within ICL3 (residues 205–252)
+
+AF2 multimer:
+  Chain A — chimeric SSTR2-cpGFP (GA candidate, ~600 AA)
+  Chain B — somatostatin ligand from data/ligands.faa
+  ipTM scores how well the receptor exposes its ECL binding site
+  to the peptide ligand in a folded complex.
 """
 
 from __future__ import annotations
@@ -28,6 +30,30 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+
+
+def _load_ligands(fasta_path: str | Path) -> list[tuple[str, str]]:
+    """
+    Parse a FASTA file and return list of (name, sequence) tuples.
+    Skips blank lines and comment lines.
+    """
+    entries: list[tuple[str, str]] = []
+    name = ""
+    seq_parts: list[str] = []
+    for line in Path(fasta_path).read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith(">"):
+            if name:
+                entries.append((name, "".join(seq_parts)))
+            name = line[1:].split()[0]
+            seq_parts = []
+        else:
+            seq_parts.append(line.upper())
+    if name:
+        entries.append((name, "".join(seq_parts)))
+    return entries
 
 from agent.analyst import generate_summary, select_af2_candidates
 from analysis.pareto import pareto_front, plot_pareto
@@ -59,6 +85,14 @@ FP_SEQUENCE = (
 )
 
 FP_NAME = "cpGFP"
+
+# Ligand(s) for AF2 multimer — loaded from data/ligands.faa
+# Chain A = chimeric SSTR2-cpGFP, Chain B = somatostatin ligand
+_LIGANDS = _load_ligands(Path(__file__).parent / "data" / "ligands.faa")
+if not _LIGANDS:
+    raise RuntimeError("data/ligands.faa is empty or missing — add at least one FASTA entry")
+LIGAND_NAME, LIGAND_SEQUENCE = _LIGANDS[0]
+print(f"[pipeline] Ligand loaded: {LIGAND_NAME} ({len(LIGAND_SEQUENCE)} AA) — {LIGAND_SEQUENCE}")
 
 # GA settings per round
 GA_ROUNDS = [
@@ -193,11 +227,11 @@ def main():
                           sorted(plddt_cache.items(), key=lambda x: x[1], reverse=True)[:TOP_K_AF2]]
 
     # -----------------------------------------------------------------------
-    # AF2 multimer — submit full chimeric as chain A, nothing else needed
-    # (Tamarind folds the chimeric sequence as a monomer for ipTM scoring)
+    # AF2 multimer — Chain A: chimeric SSTR2-cpGFP, Chain B: somatostatin
+    # ipTM measures how well the chimeric receptor interfaces with the ligand.
     # -----------------------------------------------------------------------
-    print(f"\n=== AF2 multimer: {len(top5_sequences)} candidates ===")
-    chain_pairs = [(seq, FP_SEQUENCE) for seq in top5_sequences]
+    print(f"\n=== AF2 multimer: {len(top5_sequences)} candidates vs {LIGAND_NAME} ===")
+    chain_pairs = [(seq, LIGAND_SEQUENCE) for seq in top5_sequences]
     af2_results = tamarind_complex_batch(chain_pairs)
 
     # -----------------------------------------------------------------------
