@@ -16,7 +16,14 @@ Feedback loop (3 rounds):
   AF2 multimer top-5                                    (~40 calls)
   ─────────────────────────────────────────────────────────────────
   Total                                                 ~86 calls
+
+GA co-evolves:
+  - SSTR2 loop residues (ECL1/2/3, ICL2/3, C-tail)
+  - N- and C-linker sequence + length (5–10 AA each)
+  - Insertion position within ICL3 (residues 205–252)
 """
+
+from __future__ import annotations
 
 import json
 import time
@@ -27,7 +34,7 @@ from analysis.pareto import pareto_front, plot_pareto
 from analysis.rmsd import batch_rmsd
 from scorers.ensemble import final_score, tamarind_complex_batch, tamarind_score_batch
 from scorers.tamarind import esmfold_plddt, remaining_calls
-from search.genetic import run_ga
+from search.genetic import Individual, run_ga
 
 # ---------------------------------------------------------------------------
 # Config
@@ -52,23 +59,8 @@ FP_SEQUENCE = (
 )
 
 FP_NAME = "cpGFP"
-LINKER  = "GGSGGS"
 
-# FP insertion site — ECL2 mid-point (residue 160, 0-indexed 159).
-# ECL2 (residues 149–173) is the canonical insertion site for GPCR
-# biosensors: extracellular, accessible, tolerates structural insertions.
-# Reference: Bharat et al. 2023 Nat Methods; Mehta et al. 2014 Science.
-FP_INSERT_POS = 159   # 0-indexed position in SSTR2 where linker starts
-
-# Build chimeric seed: SSTR2[:pos] + LINKER + cpGFP + LINKER + SSTR2[pos:]
-_INSERT_BLOCK = LINKER + FP_SEQUENCE + LINKER   # fixed, never mutated
-CHIMERIC_SEED = (
-    SEED_SEQUENCE[:FP_INSERT_POS]
-    + _INSERT_BLOCK
-    + SEED_SEQUENCE[FP_INSERT_POS:]
-)
-
-# GA settings per round — smaller populations, fewer generations
+# GA settings per round
 GA_ROUNDS = [
     {"population_size": 30, "n_generations": 40, "top_k": 20, "esmfold_quota": 20},
     {"population_size": 30, "n_generations": 30, "top_k": 15, "esmfold_quota": 15},
@@ -91,18 +83,24 @@ def log(data: dict):
 # ---------------------------------------------------------------------------
 
 def main():
-    # WT ESMFold baseline — chimeric construct (1 call, RMSD reference)
-    print("\n=== Baseline: ESMFold chimeric SSTR2-cpGFP (1 call, RMSD reference) ===")
-    print(f"[pipeline] Chimeric seed length: {len(CHIMERIC_SEED)} AA "
-          f"(SSTR2 {len(SEED_SEQUENCE)} + insert block {len(_INSERT_BLOCK)})")
-    wt_result = esmfold_plddt(CHIMERIC_SEED)
+    # WT baseline: chimeric SSTR2-cpGFP at canonical ICL3 mid-point (pos 228)
+    # Used only for RMSD reference — 1 Tamarind call, cached forever.
+    _wt_linker = "GGSGGS"
+    _wt_chimeric = (
+        SEED_SEQUENCE[:228]
+        + _wt_linker + FP_SEQUENCE + _wt_linker
+        + SEED_SEQUENCE[228:]
+    )
+    print("\n=== Baseline: ESMFold WT chimeric SSTR2-cpGFP@ICL3 (RMSD reference) ===")
+    print(f"[pipeline] WT chimeric length: {len(_wt_chimeric)} AA")
+    wt_result = esmfold_plddt(_wt_chimeric)
     wt_pdb    = wt_result.get("pdb")
-    print(f"[pipeline] Chimeric WT pLDDT: {wt_result.get('plddt')}")
+    print(f"[pipeline] WT pLDDT: {wt_result.get('plddt')}")
 
     # Shared state across rounds
-    plddt_cache: dict[str, float] = {}    # sequence → pLDDT, grows each round
-    all_survivors: list[str]      = [CHIMERIC_SEED]  # seed chimeric sequences
-    all_individuals               = []   # all GA individuals across rounds (for local_fitness lookup)
+    plddt_cache: dict[str, float] = {}   # chimeric_sequence → pLDDT
+    all_individuals: list[Individual] = []
+    seed_survivors: list[Individual] = []   # top Individual objects from prior round
 
     # -----------------------------------------------------------------------
     # Feedback loop
@@ -113,26 +111,31 @@ def main():
         print(f"  Budget remaining: {remaining_calls()} calls")
         print(f"{'='*60}")
 
-        # --- GA ---
         print(f"\n[Round {round_idx}] GA: {cfg['population_size']} pop × {cfg['n_generations']} gen")
         top_individuals = run_ga(
-            seed_sequences=all_survivors,
+            seed_receptor=SEED_SEQUENCE,
+            fp_sequence=FP_SEQUENCE,
             fp_name=FP_NAME,
-            linker=LINKER,
             population_size=cfg["population_size"],
             n_generations=cfg["n_generations"],
             top_k=cfg["top_k"],
             plddt_cache=plddt_cache,
             round_num=round_idx,
-            insert_pos=FP_INSERT_POS,
-            insert_len=len(_INSERT_BLOCK),
+            seed_individuals=seed_survivors,
         )
         all_individuals.extend(top_individuals)
 
         for ind in top_individuals:
-            log({"phase": f"ga_r{round_idx}", "sequence": ind.sequence, "fitness": ind.fitness})
+            log({
+                "phase": f"ga_r{round_idx}",
+                "sequence": ind.sequence,
+                "fitness": ind.fitness,
+                "insert_pos": ind.insert_pos,
+                "linker_n": ind.linker_n,
+                "linker_c": ind.linker_c,
+            })
 
-        # --- ESMFold: only score sequences NOT already in cache ---
+        # --- ESMFold: score chimeric sequences not yet in cache ---
         new_sequences = [
             ind.sequence for ind in top_individuals
             if ind.sequence not in plddt_cache
@@ -150,15 +153,22 @@ def main():
                     plddt_cache[seq] = plddt
                 log({"phase": f"esmfold_r{round_idx}", **{k: v for k, v in r.items() if k != "pdb"}})
 
-        # --- Survivors: top sequences by pLDDT from all cached so far ---
-        ranked = sorted(plddt_cache.items(), key=lambda x: x[1], reverse=True)
-        all_survivors = [seq for seq, _ in ranked[:cfg["top_k"]]]
+        # --- Survivors: top-k individuals by pLDDT (for next round seeding) ---
+        ranked_inds = sorted(
+            [ind for ind in top_individuals if ind.sequence in plddt_cache],
+            key=lambda x: plddt_cache[x.sequence],
+            reverse=True,
+        )
+        seed_survivors = ranked_inds[:cfg["top_k"]]
 
-        print(f"[Round {round_idx}] Top pLDDT so far: "
-              + " | ".join(f"{p:.1f}" for _, p in ranked[:5]))
+        top5_plddt = [(plddt_cache[ind.sequence], ind.insert_pos, ind.linker_n, ind.linker_c)
+                      for ind in seed_survivors[:5]]
+        print(f"[Round {round_idx}] Top pLDDT:")
+        for plddt, pos, ln, lc in top5_plddt:
+            print(f"  pLDDT={plddt:.1f}  pos={pos}  ln={ln}  lc={lc}")
 
     # -----------------------------------------------------------------------
-    # Save all ESMFold results
+    # Save ESMFold results
     # -----------------------------------------------------------------------
     esmfold_results_path = "results/esmfold_results.json"
     esmfold_summary = [
@@ -167,7 +177,7 @@ def main():
     ]
     Path(esmfold_results_path).parent.mkdir(parents=True, exist_ok=True)
     Path(esmfold_results_path).write_text(json.dumps(esmfold_summary, indent=2))
-    print(f"\n[pipeline] {len(plddt_cache)} unique sequences scored by ESMFold")
+    print(f"\n[pipeline] {len(plddt_cache)} unique chimeric sequences scored by ESMFold")
 
     # -----------------------------------------------------------------------
     # Agent selects top-5 for AF2
@@ -181,17 +191,19 @@ def main():
         shortlist = json.loads(Path(af2_shortlist_path).read_text())
         top5_sequences = [c["sequence"] for c in shortlist.get("candidates", [])]
     else:
-        top5_sequences = [seq for seq, _ in sorted(plddt_cache.items(), key=lambda x: x[1], reverse=True)[:TOP_K_AF2]]
+        top5_sequences = [seq for seq, _ in
+                          sorted(plddt_cache.items(), key=lambda x: x[1], reverse=True)[:TOP_K_AF2]]
 
     # -----------------------------------------------------------------------
-    # AF2 multimer — top-5 (~40 calls)
+    # AF2 multimer — submit full chimeric as chain A, nothing else needed
+    # (Tamarind folds the chimeric sequence as a monomer for ipTM scoring)
     # -----------------------------------------------------------------------
     print(f"\n=== AF2 multimer: {len(top5_sequences)} candidates ===")
     chain_pairs = [(seq, FP_SEQUENCE) for seq in top5_sequences]
     af2_results = tamarind_complex_batch(chain_pairs)
 
     # -----------------------------------------------------------------------
-    # RMSD vs WT (free — BioPython)
+    # RMSD vs WT baseline
     # -----------------------------------------------------------------------
     print("\n=== RMSD analysis vs WT ===")
     if wt_pdb:
@@ -216,14 +228,17 @@ def main():
     af2_results.sort(key=lambda x: x.get("final_score") or 0, reverse=True)
 
     # -----------------------------------------------------------------------
-    # Pareto front + outputs
+    # Pareto front + save outputs
     # -----------------------------------------------------------------------
     front = pareto_front(af2_results)
     plot_pareto(af2_results, front)
 
     af2_results_path = "results/af2_results.json"
     Path(af2_results_path).write_text(
-        json.dumps([{k: v for k, v in r.items() if k != "pdb"} for r in af2_results[:5]], indent=2, default=str)
+        json.dumps(
+            [{k: v for k, v in r.items() if k != "pdb"} for r in af2_results[:5]],
+            indent=2, default=str,
+        )
     )
     Path("results/top5.json").write_text(json.dumps(af2_results[:5], indent=2, default=str))
 
