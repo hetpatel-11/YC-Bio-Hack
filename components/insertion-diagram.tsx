@@ -87,7 +87,7 @@ function SstBlob({ cx, cy }: { cx: number; cy: number }) {
     <g>
       <ellipse cx={cx} cy={cy} rx={38} ry={16} fill="#38bdf8" opacity={0.18} stroke="#0284c7" strokeWidth={1} strokeDasharray="3 2" />
       <ellipse cx={cx} cy={cy} rx={26} ry={11} fill="#38bdf8" opacity={0.35} />
-      <text x={cx} y={cy + 4} fontSize={9} fill="#0c4a6e" textAnchor="middle" fontWeight="700">SST-14</text>
+      <text x={cx} y={cy + 4} fontSize={9} fill="#0c4a6e" textAnchor="middle" fontWeight="700">SST-28</text>
     </g>
   );
 }
@@ -110,7 +110,7 @@ export function InsertionDiagram({ sites, selectedPosition, onSelectPosition }: 
       <div className="mb-4">
         <h2 className="text-sm font-semibold text-foreground">SSTR2 Biosensor — Insertion Diagram</h2>
         <p className="text-xs text-muted-foreground mt-1">
-          Somatostatin-14 (blue) binds the <strong>extracellular loops (ECL1/2/3)</strong>.
+          Somatostatin-28 (blue) binds the <strong>extracellular loops (ECL1/2/3)</strong>.
           cpGFP (orange) is inserted into <strong>ICL3</strong> (TM5→TM6, residues 205–252).
           Ligand binding deforms ICL3 → cpGFP fluorescence change.
         </p>
@@ -137,13 +137,13 @@ export function InsertionDiagram({ sites, selectedPosition, onSelectPosition }: 
             </filter>
           </defs>
 
-          {/* ── Somatostatin-14 ligand (extracellular) ── */}
+          {/* ── Somatostatin-28 ligand (extracellular) ── */}
           <SstBlob cx={sstX} cy={sstY} />
           <text x={sstX} y={sstY - 19} fontSize={8} fill="#0369a1" textAnchor="middle">
-            somatostatin-14 (ligand)
+            somatostatin-28 (ligand)
           </text>
 
-          {/* Dashed arrows from SST-14 down to each ECL peak */}
+          {/* Dashed arrows from SST-28 down to each ECL peak */}
           {ECL_LOOPS.map((loopIdx) => {
             const ex = loopMidX(loopIdx);
             const peakY = MEMBRANE_Y - 10 - 30; // ECL arc peak approx
