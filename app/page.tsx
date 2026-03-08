@@ -7,6 +7,7 @@ import { CandidatesTable } from "@/components/candidates-table";
 import { ParetoChart } from "@/components/pareto-chart";
 import { CandidateDetail } from "@/components/candidate-detail";
 import { InsertionChart } from "@/components/insertion-chart";
+import { InsertionDiagram } from "@/components/insertion-diagram";
 import { ProteinViewer } from "@/components/protein-viewer";
 import {
   mockCandidates,
@@ -39,6 +40,15 @@ export default function DashboardPage() {
               candidates={mockCandidates}
               selectedId={selectedCandidateId}
               onSelect={setSelectedCandidateId}
+            />
+
+            <InsertionDiagram
+              sites={mockInsertionSites}
+              selectedPosition={selectedCandidate?.insertionPosition || null}
+              onSelectPosition={(pos) => {
+                const match = mockCandidates.find((c) => c.insertionPosition === pos);
+                if (match) setSelectedCandidateId(match.id);
+              }}
             />
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
