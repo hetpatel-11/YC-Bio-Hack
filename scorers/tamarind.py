@@ -299,6 +299,84 @@ def alphafold2_multimer(chains: list[str], num_models: int = 5) -> dict:
     return output
 
 
+def alphafold2_multimer_batch(chain_lists: list[list[str]], num_models: int = 5) -> list[dict]:
+    """
+    Submit ALL AF2 multimer jobs at once, then poll them concurrently via threads.
+
+    This is faster than the sequential alphafold2_multimer() because all jobs run
+    on Tamarind's servers in parallel — total wall time ≈ max(single job time).
+
+    Returns list of result dicts in the same order as chain_lists.
+    """
+    import threading
+
+    results: list[dict | None] = [None] * len(chain_lists)
+    _cache_lock = threading.Lock()
+
+    # ── step 1: check cache, submit uncached jobs ────────────────────────────
+    pending: list[tuple[int, str, str]] = []   # (index, job_name, cache_key)
+
+    for i, chains in enumerate(chain_lists):
+        sequence_key = ":".join(chains)
+        key = _cache_key("alphafold2_multimer", sequence_key, num_models=num_models)
+        cache = _load_cache()
+        if key in cache:
+            print(f"[tamarind] cache hit: AF2 multimer {sequence_key[:30]}...")
+            results[i] = cache[key]
+            continue
+
+        job_name = f"af2multi_{abs(hash(sequence_key)) % 10**8}"
+        settings = {
+            "sequence":  sequence_key,
+            "numModels": str(num_models),
+            "modelType": "alphafold2_multimer_v3",
+            "useMSA":    True,
+        }
+        _submit(job_name, "alphafold", settings)
+        pending.append((i, job_name, key, sequence_key))
+
+    if not pending:
+        return results  # type: ignore[return-value]
+
+    print(f"[tamarind] polling {len(pending)} AF2 jobs concurrently…")
+
+    # ── step 2: poll + fetch all pending jobs in parallel ────────────────────
+    def _poll_and_store(i: int, job_name: str, cache_key: str, sequence_key: str):
+        try:
+            completed = _poll(job_name)
+            result = _get_result(completed)
+            output = {
+                "plddt":    result.get("plddt") or result.get("plddt_mean") or result.get("avg_plddt"),
+                "ptm":      result.get("ptm"),
+                "iptm":     result.get("iptm"),
+                "pdb":      result.get("pdb"),
+                "pdb_file": f"results/pdb/{job_name}.pdb",
+                "seq_hash": job_name,
+                "raw":      result,
+            }
+            results[i] = output
+            with _cache_lock:
+                cache = _load_cache()
+                cache[cache_key] = output
+                _save_cache(cache)
+            print(f"[tamarind] AF2 job '{job_name}' done | "
+                  f"pLDDT={output.get('plddt')}  ipTM={output.get('iptm')}")
+        except Exception as e:
+            print(f"[tamarind] ERROR in AF2 job '{job_name}': {e}")
+            results[i] = {"error": str(e), "plddt": None, "iptm": None, "pdb": None}
+
+    threads = [
+        threading.Thread(target=_poll_and_store, args=(i, jn, ck, sk), daemon=True)
+        for i, jn, ck, sk in pending
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    return results  # type: ignore[return-value]
+
+
 def batch_esmfold(sequences: list[str]) -> list[dict]:
     """Score a list of sequences with ESMFold. Respects cache and budget."""
     results = []

@@ -79,18 +79,19 @@ def tamarind_score_batch(sequences: list[str]) -> list[dict]:
 
 def tamarind_complex_batch(chain_pairs: list[tuple[str, str]]) -> list[dict]:
     """
-    Phase 3: run AlphaFold2 multimer on top-5 receptor+FP chain pairs.
-    Call ONCE — ~40 API calls total.
+    Phase 3: run AlphaFold2 multimer on top-5 receptor+ligand chain pairs.
+    Submits ALL jobs at once then polls them concurrently — wall time ≈ 1 job.
 
     Returns list of dicts with keys: chains, plddt, ptm, iptm, pdb.
     """
-    from scorers.tamarind import alphafold2_multimer
+    from scorers.tamarind import alphafold2_multimer_batch
 
-    results = []
-    for receptor, fp in chain_pairs:
-        result = alphafold2_multimer([receptor, fp])
-        results.append({"chains": [receptor, fp], **result})
-    return results
+    chain_lists = [[receptor, ligand] for receptor, ligand in chain_pairs]
+    raw_results = alphafold2_multimer_batch(chain_lists)
+    return [
+        {"chains": list(chains), **(result or {})}
+        for chains, result in zip(chain_pairs, raw_results)
+    ]
 
 
 # ---------------------------------------------------------------------------
