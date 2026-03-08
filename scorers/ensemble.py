@@ -1,78 +1,80 @@
+from __future__ import annotations
+
 """
 Unified scorer ensemble.
 
 Two-phase design:
-  Phase 1 (GA search) — local/free scorers only, no Tamarind calls.
-  Phase 2 (post-GA)   — Tamarind ESMFold on top-50, then AF2 on top-5.
+  Phase 1 (GA search)  — local/free scorers only, no Tamarind calls.
+  Phase 2 (post-GA)    — Tamarind ESMFold on top-50, then AF2 on top-5.
+  Phase 3 (post-AF2)   — structural RMSD vs WT reference structure.
+
+Local scorers used in GA:
+  - TM topology check  (hardcoded SSTR2 topology — no API)
+  - BLOSUM62 conservation score  (replaces ProteinMPNN stub)
+  - FP brightness / linker score
 
 Usage:
     from scorers.ensemble import local_score, tamarind_score_batch
 
-    # inside GA loop — FREE
-    fitness = local_score(sequence, fp_name="mVenus", linker="GGSGGS")
+    # inside GA loop — FREE, no API calls
+    fitness = local_score(sequence, fp_name="cpGFP", linker="GGSGGS")
 
-    # after GA — uses API budget
+    # after GA — uses Tamarind API budget
     results = tamarind_score_batch(top50_sequences)
 """
 
+from scorers.conservation import conservation_score
 from scorers.fp_model import score_construct
-from scorers.tmbed import topology_score
+from scorers.tmbed import SSTR2_WILDTYPE, topology_score
 
-# Weights for the GA search (local phase only)
+# ---------------------------------------------------------------------------
+# GA phase weights (all local, no API)
+# ---------------------------------------------------------------------------
 LOCAL_WEIGHTS = {
-    "tmbed":       0.40,
-    "fp_brightness": 0.35,
-    "proteinmpnn": 0.25,
+    "conservation": 0.45,  # BLOSUM62 — how conservative are loop mutations
+    "fp_score":     0.30,  # cpGFP brightness + linker compatibility
+    "tm_integrity": 0.25,  # TM helix preservation (safety check)
 }
-
-
-def _proteinmpnn_score(sequence: str) -> float:
-    """
-    Placeholder — replace with actual ProteinMPNN call.
-    ProteinMPNN can be run locally; returns log-probability score normalized to [0,1].
-    """
-    # TODO: call ProteinMPNN subprocess or local server
-    return 0.5
 
 
 def local_score(
     sequence: str,
-    fp_name: str = "mVenus",
+    fp_name: str = "cpGFP",
     linker: str = "GGSGGS",
     receptor_loop: str = "",
 ) -> float:
     """
-    Compute a weighted local fitness score for use inside the GA.
+    Compute weighted local fitness score for use inside the GA.
     No Tamarind API calls — safe to call thousands of times.
 
     Returns a float in [0, 1].
     """
-    tm = topology_score(sequence)
-    fp = score_construct(fp_name, linker, receptor_loop)
-    mpnn = _proteinmpnn_score(sequence)
+    cons = conservation_score(sequence, wildtype=SSTR2_WILDTYPE)
+    fp   = score_construct(fp_name, linker, receptor_loop)
+    tm   = topology_score(sequence)
 
-    score = (
-        LOCAL_WEIGHTS["tmbed"]        * tm
-        + LOCAL_WEIGHTS["fp_brightness"] * fp
-        + LOCAL_WEIGHTS["proteinmpnn"] * mpnn
+    return (
+        LOCAL_WEIGHTS["conservation"] * cons
+        + LOCAL_WEIGHTS["fp_score"]     * fp
+        + LOCAL_WEIGHTS["tm_integrity"] * tm
     )
-    return score
 
+
+# ---------------------------------------------------------------------------
+# Post-GA Tamarind phases
+# ---------------------------------------------------------------------------
 
 def tamarind_score_batch(sequences: list[str]) -> list[dict]:
     """
     Phase 2: score top-50 sequences with Tamarind ESMFold.
-    Call ONCE after GA has converged — never from inside the search loop.
+    Call ONCE after GA — never from inside the search loop.
 
     Returns list of dicts with keys: sequence, plddt, pdb.
     """
-    from scorers.tamarind import batch_esmfold  # import here to avoid accidental use
+    from scorers.tamarind import batch_esmfold  # late import guards accidental use
 
     raw = batch_esmfold(sequences)
-    return [
-        {"sequence": seq, **result}
-        for seq, result in zip(sequences, raw)
-    ]
+    return [{"sequence": seq, **result} for seq, result in zip(sequences, raw)]
 
 
 def tamarind_complex_batch(chain_pairs: list[tuple[str, str]]) -> list[dict]:
@@ -89,3 +91,30 @@ def tamarind_complex_batch(chain_pairs: list[tuple[str, str]]) -> list[dict]:
         result = alphafold2_multimer([receptor, fp])
         results.append({"chains": [receptor, fp], **result})
     return results
+
+
+# ---------------------------------------------------------------------------
+# Final composite ranking (after all phases complete)
+# ---------------------------------------------------------------------------
+
+def final_score(candidate: dict) -> float:
+    """
+    Composite score for final ranking of AF2 results.
+    Combines structural metrics from all three phases.
+
+    candidate dict should contain: plddt, iptm, local_fitness, tm_rmsd
+    """
+    plddt         = (candidate.get("plddt") or 0) / 100   # normalize to [0,1]
+    iptm          = candidate.get("iptm") or 0
+    local_fitness = candidate.get("local_fitness") or 0
+
+    # tm_rmsd: lower = better; convert to a [0,1] score (cap at 5Å = 0.0)
+    tm_rmsd = candidate.get("tm_rmsd")
+    rmsd_score = max(0.0, 1.0 - (tm_rmsd / 5.0)) if tm_rmsd is not None else 0.5
+
+    return (
+        0.35 * plddt
+        + 0.30 * iptm
+        + 0.20 * rmsd_score
+        + 0.15 * local_fitness
+    )

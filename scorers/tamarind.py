@@ -1,5 +1,11 @@
+from __future__ import annotations
+
 """
 Tamarind API wrapper — ESMFold (monomer pLDDT) and AlphaFold2 (complex ipTM).
+
+API reference: https://app.tamarind.bio/api-docs
+Base URL:      https://app.tamarind.bio/api
+Auth:          x-api-key header
 
 BUDGET: ~100 calls total. This module enforces a hard stop at MAX_CALLS.
 Never call from inside a search loop — only from post-GA batch steps.
@@ -13,11 +19,14 @@ from pathlib import Path
 import requests
 
 TAMARIND_API_KEY = os.environ.get("TAMARIND_API_KEY", "")
-BASE_URL = "https://api.tamarind.bio"  # update if different
+BASE_URL = "https://app.tamarind.bio/api"
 
 CACHE_FILE = Path(__file__).parent.parent / "results" / "tamarind_cache.json"
 COUNTER_FILE = Path(__file__).parent.parent / "results" / "tamarind_calls.json"
 MAX_CALLS = 95  # hard stop — 5-call buffer below the 100 limit
+
+POLL_INTERVAL = 15   # seconds between status checks
+POLL_TIMEOUT  = 120  # max polls before giving up (~30 min)
 
 
 # ---------------------------------------------------------------------------
@@ -71,33 +80,70 @@ def _cache_key(tool: str, sequence: str, **kwargs) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Low-level request
+# Low-level request helpers
 # ---------------------------------------------------------------------------
 
-def _submit_job(tool: str, payload: dict) -> dict:
-    """Submit a job and poll until complete. Returns the result dict."""
+def _headers() -> dict:
+    return {
+        "x-api-key": TAMARIND_API_KEY,
+        "Content-Type": "application/json",
+    }
+
+
+def _submit(job_name: str, job_type: str, settings: dict) -> str:
+    """POST /submit-job — returns job_id string."""
     _guard()
-    headers = {"Authorization": f"Bearer {TAMARIND_API_KEY}", "Content-Type": "application/json"}
-
-    # Submit
-    resp = requests.post(f"{BASE_URL}/submit/{tool}", json=payload, headers=headers, timeout=30)
+    payload = {
+        "jobName": job_name,
+        "type": job_type,
+        "settings": settings,
+    }
+    resp = requests.post(f"{BASE_URL}/submit-job", json=payload, headers=_headers(), timeout=30)
     resp.raise_for_status()
-    job_id = resp.json()["job_id"]
+    # Response is a plain success message; job name is used to retrieve results
     count = _increment_counter()
-    print(f"[tamarind] submitted {tool} job {job_id} | calls used: {count}/{MAX_CALLS}")
+    print(f"[tamarind] submitted '{job_name}' ({job_type}) | calls used: {count}/{MAX_CALLS}")
+    return job_name
 
-    # Poll
-    for _ in range(120):  # up to 20 min
-        time.sleep(10)
-        status_resp = requests.get(f"{BASE_URL}/status/{job_id}", headers=headers, timeout=30)
-        status_resp.raise_for_status()
-        data = status_resp.json()
-        if data["status"] == "complete":
-            return data
-        if data["status"] == "failed":
-            raise RuntimeError(f"Tamarind job {job_id} failed: {data.get('error')}")
 
-    raise TimeoutError(f"Tamarind job {job_id} timed out after 20 min")
+def _poll(job_name: str) -> dict:
+    """GET /jobs — poll until job is complete, return result dict."""
+    for attempt in range(POLL_TIMEOUT):
+        time.sleep(POLL_INTERVAL)
+        resp = requests.get(f"{BASE_URL}/jobs", headers=_headers(), timeout=30)
+        resp.raise_for_status()
+        jobs = resp.json() if isinstance(resp.json(), list) else resp.json().get("jobs", [])
+        job = next((j for j in jobs if j.get("jobName") == job_name), None)
+        if job is None:
+            continue
+        status = job.get("status", "")
+        if status in ("complete", "completed", "done", "finished"):
+            return job
+        if status in ("failed", "error"):
+            raise RuntimeError(f"Tamarind job '{job_name}' failed: {job.get('error')}")
+        if attempt % 4 == 0:
+            print(f"[tamarind] job '{job_name}' status: {status} ({attempt * POLL_INTERVAL}s elapsed)")
+
+    raise TimeoutError(f"Tamarind job '{job_name}' timed out after {POLL_TIMEOUT * POLL_INTERVAL}s")
+
+
+def _get_result(job_name: str) -> dict:
+    """POST /result — download result for a completed job."""
+    resp = requests.post(
+        f"{BASE_URL}/result",
+        json={"jobName": job_name},
+        headers=_headers(),
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _run_job(job_name: str, job_type: str, settings: dict) -> dict:
+    """Submit, poll, and fetch result in one call."""
+    _submit(job_name, job_type, settings)
+    _poll(job_name)
+    return _get_result(job_name)
 
 
 # ---------------------------------------------------------------------------
@@ -106,7 +152,7 @@ def _submit_job(tool: str, payload: dict) -> dict:
 
 def esmfold_plddt(sequence: str) -> dict:
     """
-    Run ESMFold on a single monomer sequence.
+    Run ESMFold on a single monomer sequence via Tamarind.
     Returns {"plddt": float, "pdb": str, "raw": dict}.
     Cached — will not re-call for a sequence already scored.
     """
@@ -116,11 +162,13 @@ def esmfold_plddt(sequence: str) -> dict:
         print(f"[tamarind] cache hit: ESMFold {sequence[:20]}...")
         return cache[key]
 
-    result = _submit_job("esmfold", {"sequence": sequence})
+    job_name = f"esmfold_{abs(hash(sequence)) % 10**8}"
+    result = _run_job(job_name, "esmfold", {"sequence": sequence})
+
     output = {
-        "plddt": result.get("plddt_mean"),
-        "pdb": result.get("pdb"),
-        "raw": result,
+        "plddt": result.get("plddt") or result.get("plddt_mean") or result.get("avg_plddt"),
+        "pdb":   result.get("pdb") or result.get("pdbFile"),
+        "raw":   result,
     }
     cache[key] = output
     _save_cache(cache)
@@ -129,27 +177,37 @@ def esmfold_plddt(sequence: str) -> dict:
 
 def alphafold2_multimer(chains: list[str], num_models: int = 5) -> dict:
     """
-    Run AlphaFold2 multimer on a list of chains (protein complex).
+    Run AlphaFold2 multimer on a list of chains (e.g., [receptor_seq, fp_seq]).
+    Chains are joined with ':' per Tamarind's multimer convention.
     Returns {"plddt": float, "ptm": float, "iptm": float, "pdb": str, "raw": dict}.
-    Cached. Counts as 1 API call regardless of num_models.
+    Cached. Counts as 1 API call.
     """
-    sequence_key = "|".join(chains)
+    sequence_key = ":".join(chains)
     cache = _load_cache()
     key = _cache_key("alphafold2_multimer", sequence_key, num_models=num_models)
     if key in cache:
         print(f"[tamarind] cache hit: AF2 multimer {sequence_key[:30]}...")
         return cache[key]
 
-    payload = {"sequences": chains, "num_models": num_models}
-    result = _submit_job("alphafold2_multimer", payload)
-    # Use rank-1 model metrics
-    best = result.get("models", [result])[0]
+    job_name = f"af2multi_{abs(hash(sequence_key)) % 10**8}"
+    settings = {
+        "sequence":  sequence_key,        # chains separated by ':'
+        "numModels": str(num_models),
+        "modelType": "alphafold2_multimer_v3",
+        "useMSA":    True,
+    }
+    result = _run_job(job_name, "alphafold", settings)
+
+    # Tamarind may return a list of models ranked by quality; take rank-1
+    models = result.get("models") or [result]
+    best = models[0] if models else result
+
     output = {
-        "plddt": best.get("plddt_mean"),
-        "ptm": best.get("ptm"),
-        "iptm": best.get("iptm"),
-        "pdb": best.get("pdb"),
-        "raw": result,
+        "plddt": best.get("plddt") or best.get("plddt_mean") or best.get("avg_plddt"),
+        "ptm":   best.get("ptm"),
+        "iptm":  best.get("iptm"),
+        "pdb":   best.get("pdb") or best.get("pdbFile"),
+        "raw":   result,
     }
     cache[key] = output
     _save_cache(cache)

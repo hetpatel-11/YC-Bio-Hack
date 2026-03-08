@@ -10,3 +10,4 @@ The chosen sequence should be set in `pipeline.py` → `SEED_SEQUENCE`.
 
 UniProt suggested starting points:
 - ADRB2_HUMAN (P07550) — 413 AA, 7 TM helices
+- SSTR2 GPCR
