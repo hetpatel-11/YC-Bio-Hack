@@ -107,28 +107,59 @@ def _submit(job_name: str, job_type: str, settings: dict) -> str:
 
 
 def _poll(job_name: str) -> dict:
-    """GET /jobs — poll until job is complete, return result dict."""
+    """
+    GET /jobs — poll until job is complete, return the completed job dict.
+
+    Actual API field names (verified from live response):
+      JobName, JobStatus, Score (JSON string), Type
+    Status values: "Complete", "In Queue", "Running", "Stopped"
+    Score is embedded as a JSON string in the job dict — no /result call needed.
+    """
+    import json as _json
     for attempt in range(POLL_TIMEOUT):
         time.sleep(POLL_INTERVAL)
         resp = requests.get(f"{BASE_URL}/jobs", headers=_headers(), timeout=30)
         resp.raise_for_status()
-        jobs = resp.json() if isinstance(resp.json(), list) else resp.json().get("jobs", [])
-        job = next((j for j in jobs if j.get("jobName") == job_name), None)
+        body = resp.json()
+        jobs = body if isinstance(body, list) else body.get("jobs", [])
+        job = next(
+            (j for j in jobs if (j.get("JobName") or j.get("jobName")) == job_name),
+            None,
+        )
         if job is None:
+            if attempt % 4 == 0:
+                print(f"[tamarind] job '{job_name}' not found yet ({attempt * POLL_INTERVAL}s)")
             continue
-        status = job.get("status", "")
-        if status in ("complete", "completed", "done", "finished"):
+        status = job.get("JobStatus") or job.get("status") or ""
+        if status.lower() in ("complete", "completed", "done", "finished"):
+            # Parse Score JSON string if present
+            score_raw = job.get("Score") or job.get("score")
+            if isinstance(score_raw, str):
+                try:
+                    job["_score"] = _json.loads(score_raw)
+                except Exception:
+                    job["_score"] = {}
+            elif isinstance(score_raw, dict):
+                job["_score"] = score_raw
             return job
-        if status in ("failed", "error"):
-            raise RuntimeError(f"Tamarind job '{job_name}' failed: {job.get('error')}")
+        if status.lower() in ("failed", "error", "stopped"):
+            raise RuntimeError(f"Tamarind job '{job_name}' failed (status={status})")
         if attempt % 4 == 0:
             print(f"[tamarind] job '{job_name}' status: {status} ({attempt * POLL_INTERVAL}s elapsed)")
 
     raise TimeoutError(f"Tamarind job '{job_name}' timed out after {POLL_TIMEOUT * POLL_INTERVAL}s")
 
 
-def _get_result(job_name: str) -> dict:
-    """POST /result — download result for a completed job."""
+def _get_result(job: dict) -> dict:
+    """
+    Extract structured result from a completed job dict.
+    Score is already embedded in the job as job['_score'] (parsed from Score JSON).
+    Falls back to POST /result if Score field is missing.
+    """
+    if "_score" in job:
+        return job["_score"]
+    # Fallback: POST /result
+    job_name = job.get("JobName") or job.get("jobName", "")
     resp = requests.post(
         f"{BASE_URL}/result",
         json={"jobName": job_name},
@@ -142,8 +173,8 @@ def _get_result(job_name: str) -> dict:
 def _run_job(job_name: str, job_type: str, settings: dict) -> dict:
     """Submit, poll, and fetch result in one call."""
     _submit(job_name, job_type, settings)
-    _poll(job_name)
-    return _get_result(job_name)
+    completed_job = _poll(job_name)
+    return _get_result(completed_job)
 
 
 # ---------------------------------------------------------------------------
@@ -165,9 +196,11 @@ def esmfold_plddt(sequence: str) -> dict:
     job_name = f"esmfold_{abs(hash(sequence)) % 10**8}"
     result = _run_job(job_name, "esmfold", {"sequence": sequence})
 
+    # Tamarind ESMFold Score fields (verified): plddt, ptm, num_recycles, chain_linker
     output = {
         "plddt": result.get("plddt") or result.get("plddt_mean") or result.get("avg_plddt"),
-        "pdb":   result.get("pdb") or result.get("pdbFile"),
+        "ptm":   result.get("ptm"),
+        "pdb":   result.get("pdb") or result.get("pdbFile") or result.get("pdb_string"),
         "raw":   result,
     }
     cache[key] = output

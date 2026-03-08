@@ -1,161 +1,192 @@
 
-# 🧬 Drug Discovery Pipeline — Hackathon Plan
+# Drug Discovery Pipeline — Hackathon Plan
 
 ## Project Overview
 
-Design an **optimal transmembrane receptor sensor** for drug delivery by finding the best protein sequence that incorporates a **fluorescent protein (FP)** at the optimal insertion position. We use an ensemble of ML scoring models and implement a search algorithm to navigate the sequence space efficiently.
+Design an **optimal SSTR2 GPCR biosensor** by inserting **cpGFP (cp145)** at the optimal position in a flexible loop, then co-evolving the receptor loop residues and linker sequences to maximize folding confidence, ligand coupling, and FP fluorescence response.
 
-**Team Size**: 3 people
-**Duration**: 1 day
-**Goal**: Working demo with top-K designed sequences, predicted structures, and FP insertion site visualization
+**Target receptor**: SSTR2 (Somatostatin Receptor 2, NP_001041.1, 369 AA, 7 TM helices)
+**Fluorescent protein**: cpGFP cp145 variant (219 AA) — fixed, never mutated
+**Team Size**: 3 people | **Duration**: 1 day
 
 ---
 
 ## Architecture
 
 ```
-[Seed Sequence]
-      │
-      ▼
-[Mutation Generator]   ← linker variants + FP insertion positions
-      │
-      ▼
-[Scorer Ensemble]  ← LOCAL / FREE (bulk search, no API calls)
-  ├── ProteinMPNN              (sequence plausibility)
-  ├── TMbed                   (transmembrane topology)
-  └── FP Brightness            (custom model on FPbase)
-      │
-      ▼
-[Search Algorithm]
-  └── Genetic Algorithm
-      │
-      ▼
-[Top-50 Candidates filtered locally]
-      │
-      ▼
-[Tamarind API]  ← ~90 calls total, reserved for final validation
-  ├── ESMFold         → pLDDT for top-50 monomer structures
-  └── AlphaFold2      → pTM + ipTM for top-5 complex predictions
-      │
-      ▼
-[Top-5 Final Candidates + Pareto Front]
-      │
-      ▼
-[Dashboard Visualization]
+[SSTR2 WT + cpGFP (fixed)]
+         │
+         ▼
+[ICL3 Insertion Sweep]       ← score every ICL3 position locally, pick top-3
+         │
+         ▼
+[Genetic Algorithm]          ← FREE, no API — runs thousands of evals
+  Co-evolves per individual:
+  ├── SSTR2 loop residues    (ECL1/2/3, ICL2/3, C-tail — 20 AA alphabet)
+  ├── N-linker               (5–10 AA, GGSAETQN alphabet, length + sequence)
+  ├── C-linker               (5–10 AA, independently evolved)
+  └── Insert position        (within ICL3, ±1–3 shift per mutation)
+         │
+    pLDDT feedback ──────────────────────────────────────────┐
+    (blended 35% local / 65% real pLDDT after each ESMFold)  │
+         │                                                    │
+         ▼                                                    │
+[Round 1: 30 pop × 40 gen → top-20 chimeric sequences]       │
+         │ ESMFold (20 calls)  ─────────────────────────────►─┤
+         ▼                                                    │
+[Round 2: 30 pop × 30 gen → top-15 new sequences (deduped)]  │
+         │ ESMFold (15 calls)  ─────────────────────────────►─┤
+         ▼                                                    │
+[Round 3: 30 pop × 20 gen → top-10 new sequences (deduped)]  │
+         │ ESMFold (10 calls)  ─────────────────────────────►─┘
+         │
+         ▼
+[AI Agent — Claude Opus 4.6]  ← reads ESMFold results, selects top-5 for AF2
+  Tools: read_candidates, compute_diversity, write_shortlist
+         │
+         ▼
+[Tamarind AlphaFold2 multimer — top-5]   (~40 calls)
+         │
+         ▼
+[RMSD vs WT baseline]   ← free, pure-Python Cα RMSD from PDB strings
+         │
+         ▼
+[Composite Ranking + Pareto Front]   pLDDT vs ipTM
+         │
+         ▼
+[AI Agent: generate_summary()]  → results/summary.md
+         │
+         ▼
+[Dashboard — React + Molstar 3D viewer]
 ```
 
 ---
 
-## Milestones — Single Day
+## Call Budget
 
-### Morning (9am–12pm)
-
-- [ ] **Kickoff** — assign roles, set up shared repo, agree on data formats
-- [ ] **Scaffold definition** — choose receptor (GPCR or synthetic sensor), define fixed vs. mutable regions
-- [ ] **Local scorer wrappers** — TMbed, ProteinMPNN, FP brightness model (these run free, drive the GA)
-- [ ] **Tamarind API integration** — wrap ESMFold + AlphaFold2 behind `score(sequence) → float`
-  - **Do NOT call during GA search** — only call on final shortlist
-  - Cache every response to `tamarind_cache.json` — never re-call a sequence already scored
-  - Track call count in a shared counter; hard-stop at 95 calls
-- [ ] **GA baseline** — population init, mutation, crossover, selection loop
-
-### Afternoon (12pm–5pm)
-
-- [ ] **First end-to-end run** — GA using only local scorers; verify no Tamarind calls happen during search
-- [ ] **Score logging** — all runs to `results.jsonl` with sequence + scores + metadata
-- [ ] **FP insertion sweep** — grid search over loop regions, masked by secondary structure (local)
-- [ ] **Tamarind ESMFold batch** — submit top-50 GA winners for pLDDT (~50 calls)
-- [ ] **Tamarind AF2 batch** — submit top-5 ESMFold survivors for full complex prediction (~40 calls, 5 models each or multimer)
-- [ ] **Pareto front** — folding confidence (pLDDT) vs. binding affinity (ipTM) trade-off
-- [ ] **Dashboard** — top-5 sequences with all scores and 3D structures (Tamarind CIF/PDB output)
-- [ ] **FP insertion visualization** — best site highlighted on 3D model (py3Dmol / Molstar)
-- [ ] **Demo script** — 3-minute walk-through: problem → approach → results
-- [ ] **Slide deck (3 slides)** — Problem, Pipeline, Results
-
-### 5pm — Freeze & Rehearse
-
-- [ ] Code freeze
-- [ ] Demo rehearsal × 2
-- [ ] Back up all results
+| Phase | Tool | Calls | Notes |
+|-------|------|-------|-------|
+| WT baseline ESMFold | ESMFold | 1 | Chimeric SSTR2@ICL3+GFP, RMSD reference |
+| Round 1 ESMFold | ESMFold | ≤20 | Top-20 from GA round 1 (deduplicated) |
+| Round 2 ESMFold | ESMFold | ≤15 | New sequences only (cache hits free) |
+| Round 3 ESMFold | ESMFold | ≤10 | New sequences only |
+| AF2 multimer | AlphaFold2 | ≤40 | Top-5 × ~8 calls each |
+| Reserve | any | 9 | Hard stop at 95 |
+| **Total** | | **≤ 95** | Counter + cache enforced in `scorers/tamarind.py` |
 
 ---
 
-## Tamarind API — Structure Prediction
+## Sequence Design
 
-**Budget: ~100 calls total — treat each call as precious.**
+```
+Chimeric construct (600 AA):
 
-| Use Case | Tamarind Tool | Planned Calls | Notes |
-|----------|--------------|--------------|-------|
-| Monomer pLDDT (top-50 GA winners) | **ESMFold** | ~50 | Fast; language model, no MSA needed |
-| Complex / binding affinity (top-5) | **AlphaFold2** multimer | ~40 | pTM + ipTM + pAE; 5 models each = 5 calls |
-| Reserve / debug | any | ~10 | Do not exceed this buffer |
-| **Total** | | **≤ 100** | Hard limit — shared counter enforced in code |
+  SSTR2[:pos] + LINKER_N + cpGFP(219 AA) + LINKER_C + SSTR2[pos:]
+       fixed       5–10 AA    fixed             5–10 AA    fixed
+                  evolved                       evolved
+  pos ∈ ICL3 (residues 205–252) — evolved by GA, swept pre-GA
+```
 
-**Rules:**
-- Never call Tamarind inside a search loop
-- Always check cache before submitting a job
-- Test API integration with **1 call** (seed sequence) before running any batch
-- AF2 multimer counts as 1 call per submission, returns up to 5 ranked models
+**What the GA evolves:**
+- **SSTR2 loop residues** — the conformational transducers; optimizing these tunes how strongly ligand binding deforms the ICL3 geometry around the cpGFP
+- **N/C linkers** — length and sequence; GGS-rich linkers are flexible but may not maximise signal ΔF/F; GA explores alternatives
+- **Insertion position in ICL3** — different positions within ICL3 yield different proximity to the TM5/TM6 hinge
 
-**Key Outputs from Tamarind:**
-- PDB / CIF structure file
-- pLDDT — per-residue confidence (higher = better)
-- pTM — overall fold confidence (> 0.5 = good)
-- ipTM — interface confidence for complexes (> 0.8 = high quality)
-- pAE matrix — positional error between residue pairs
-
-**Input Limits:**
-- AlphaFold3-class models (Boltz, Chai): hard limit **2048 residues**
-- AlphaFold2: up to **~5000 residues**
-
-**MSA:** Enabled by default via ColabFold MMseqs2 (uniref30, bfd, colabfold env). Can be disabled for speed.
+**What is fixed:**
+- 7 TM helices (hydrophobic core — mutations destroy folding)
+- cpGFP sequence (well-characterized, fluorescence properties known)
 
 ---
 
-## Technical Stack
+## Local Scorers (GA phase — zero API calls)
 
-| Component | Tool | API calls? |
-|-----------|------|-----------|
-| Language | Python 3.11+ | — |
-| Bulk scoring (GA loop) | TMbed + ProteinMPNN + FP model | No — local/free |
-| Monomer structure (top-50) | Tamarind ESMFold | Yes — ~50 calls |
-| Complex structure (top-5) | Tamarind AlphaFold2 multimer | Yes — ~40 calls |
-| API call guard | Shared counter + cache (`tamarind_cache.json`) | — |
-| Structure viz | py3Dmol / Molstar | — |
-| Dashboard | React + Recharts | — |
-| Data logging | JSONL + Pandas | — |
-| Repo | GitHub (main + feature branches) | — |
+| Scorer | File | Weight | What it measures |
+|--------|------|--------|-----------------|
+| BLOSUM62 conservation | `scorers/conservation.py` | 0.45 | How conservative loop mutations are vs WT SSTR2 |
+| FP brightness + linker | `scorers/fp_model.py` | 0.30 | cpGFP relative brightness; GGS-fraction reward |
+| TM topology integrity | `scorers/tmbed.py` | 0.25 | Safety check — no TM helix mutations |
+| **Linker score** | `search/genetic.py` | blended (20%) | GGS fraction + brightness penalty |
+
+**pLDDT feedback blending** (rounds 2–3):
+```
+fitness = 0.35 × local_score + 0.65 × (pLDDT / 100)
+```
 
 ---
 
-## Sequence Design Constraints
+## Final Composite Score (post-AF2)
 
 ```python
-CONSTRAINTS = {
-    "receptor":      "SSTR2 (NP_001041.1, 369 AA, 7 TM helices) — TM helices fixed, loops mutable",
-    "mutable_loops": ["ECL1 (83–89)", "ICL2 (117–124)", "ECL2 (149–173)",
-                      "ICL3 (205–252)", "ECL3 (281–287)", "C-tail (314–369)"],
-    "fp":            "cpGFP cp145 variant (219 AA) — fixed module, not mutated",
-    "linker":        "5–20 AA, flexible (GGS repeats as baseline)",
-    "fp_insertion":  "ECL2 / ICL3 / ECL3 preferred (extracellular access + conformational coupling)",
-    "max_length":    800,  # SSTR2 (369) + 2×linker (12) + cpGFP (219) ≈ 600 AA
-    "forbidden":     ["cysteine-rich motifs", "signal peptides"],
-}
+final_score = 0.35 × pLDDT/100 + 0.30 × ipTM + 0.20 × rmsd_score + 0.15 × local_fitness
+rmsd_score  = max(0, 1 − tm_rmsd / 5.0)   # lower RMSD vs WT = better (cap at 5 Å)
 ```
 
 ---
 
-## Scoring Weights (tunable)
+## Repo Structure
 
-**GA search uses local-only scores. Tamarind scores applied post-hoc for final ranking.**
+```
+YC-Bio-Hack/
+├── plan.md                      ← this file
+├── pipeline.py                  ← main entrypoint
+├── test_one_round.py            ← full pipeline smoke test (mock API)
+├── test_analyst.py              ← Claude Opus 4.6 agent test (real API)
+├── data/
+│   ├── seed_sequences/
+│   │   ├── protein.faa          ← SSTR2 NP_001041.1 FASTA
+│   │   └── data_report.jsonl
+│   └── fp_sequences/
+│       └── fp_sequences.fasta   ← GFP, mCherry, mVenus, cpGFP cp145
+├── scorers/
+│   ├── ensemble.py              ← local_score(), final_score(), batch wrappers
+│   ├── tamarind.py              ← ESMFold + AF2 via Tamarind API (budget enforced)
+│   ├── conservation.py          ← BLOSUM62 scorer (replaced ProteinMPNN stub)
+│   ├── tmbed.py                 ← hardcoded SSTR2 topology (replaced TMbed REST)
+│   └── fp_model.py              ← FP brightness lookup + linker compatibility
+├── search/
+│   └── genetic.py               ← GA with evolving receptor + linker + insert_pos
+├── analysis/
+│   ├── rmsd.py                  ← pure-Python Cα RMSD from PDB strings
+│   ├── pareto.py                ← Pareto front + plotly/JSON fallback
+│   └── fp_insertion.py          ← insertion site sweep utilities
+├── agent/
+│   └── analyst.py               ← Claude Opus 4.6 with tool use
+├── results/
+│   ├── tamarind_cache.json      ← API response cache (never re-call same sequence)
+│   ├── tamarind_calls.json      ← call counter
+│   ├── esmfold_results.json     ← all ESMFold pLDDT scores
+│   ├── af2_results.json         ← top-5 AF2 results with composite scores
+│   ├── pareto.json              ← Pareto front data for dashboard
+│   ├── summary.md               ← AI-generated executive summary
+│   └── runs/                    ← timestamped JSONL logs per run
+└── dashboard/                   ← React + Molstar (feature/dashboard-ui branch)
+```
 
-| Model | Phase | Default Weight | Notes |
-|-------|-------|---------------|-------|
-| TMbed topology | GA search | 0.40 | Must preserve TM orientation |
-| ProteinMPNN plausibility | GA search | 0.35 | Sequence naturalness |
-| FP brightness model | GA search | 0.25 | Core readout for sensor function |
-| Tamarind ESMFold pLDDT | Post-GA | re-ranks top-50 | Applied after GA; no weight in search loop |
-| Tamarind AF2 ipTM | Final | re-ranks top-5 | Applied last; demo metric |
+---
+
+## Milestones Status
+
+### Pipeline (feature/pipeline branch) ✅
+
+- [x] SSTR2 + cpGFP sequences loaded from data files
+- [x] Tamarind API wrapper — correct auth, endpoints, cache, budget guard
+- [x] BLOSUM62 conservation scorer (replaced non-functional ProteinMPNN stub)
+- [x] Hardcoded SSTR2 TM topology (replaced broken TMbed REST API)
+- [x] Genetic Algorithm — co-evolves receptor loops + linker N/C + ICL3 insertion pos
+- [x] ICL3 sweep — pre-GA local score over all ICL3 positions, seeds population
+- [x] 3-round pLDDT feedback loop (blended local + real pLDDT fitness)
+- [x] Pure-Python Cα RMSD vs WT baseline
+- [x] Pareto front (pLDDT vs ipTM)
+- [x] Claude Opus 4.6 agent — tool use, candidate selection, summary generation
+- [x] Python 3.8 compatibility (`from __future__ import annotations` in all files)
+- [x] All modules tested individually and end-to-end (0 Tamarind credits used)
+
+### Dashboard (feature/dashboard-ui branch) — TODO
+
+- [ ] React app skeleton
+- [ ] Pareto front chart (Recharts)
+- [ ] 3D structure viewer (Molstar / py3Dmol)
+- [ ] Candidate table with all scores
 
 ---
 
@@ -163,65 +194,27 @@ CONSTRAINTS = {
 
 | Risk | Mitigation |
 |------|-----------|
-| Burning through 100 API calls | Never call Tamarind in the GA loop; use shared counter with hard stop at 95 |
-| Accidental duplicate API calls | Cache all responses to `tamarind_cache.json`; check before every submission |
-| API test wasting credits | Use seed sequence for the single integration test; reuse that result |
-| Search doesn't converge | GA runs on local scorers only — can run many iterations for free |
-| FP disrupts folding | Pre-filter insertions to loop regions; penalize locally before Tamarind call |
-| Integration breaks | Each module has a standalone test script; Tamarind mock mode for local dev |
-| Time crunch | Prioritize end-to-end pipeline; Tamarind calls are the last step |
+| Burning 100 API calls | GA is 100% local; Tamarind called only in post-GA batches |
+| Duplicate API calls | Cache all responses; check before every submission |
+| ICL3 insertion disrupts folding | Pre-GA sweep picks statistically tolerated positions; pLDDT feedback culls bad ones |
+| Linker too rigid / too flexible | GA evolves length (5–10) and composition; brightness + GGS penalty balances |
+| Search doesn't converge in 1 day | 3-round feedback loop accelerates convergence; local score is fast enough for 40 gen |
+| Tamarind API format changes | Wrapper isolated in `scorers/tamarind.py`; correct endpoints verified against live docs |
 
 ---
 
-## Repo Structure
-
-```
-drug-discovery-hackathon/
-├── README.md
-├── plan.md                  ← this file
-├── data/
-│   ├── seed_sequences/
-│   └── fp_sequences/        # GFP, mCherry, mVenus
-├── scorers/
-│   ├── ensemble.py          # unified scorer
-│   ├── tamarind.py          # ESMFold + AF2 via Tamarind API
-│   ├── tmbed.py
-│   └── fp_model.py
-├── search/
-│   └── genetic.py
-├── analysis/
-│   ├── fp_insertion.py      # position sweep
-│   └── pareto.py
-├── dashboard/               # React app
-├── results/
-│   └── runs/                # timestamped JSONL logs
-└── notebooks/
-    └── exploration.ipynb
-```
-
----
-
-## Communication
-
-- **Sync**: Every 2 hours (5-min standup — what's done, what's blocked)
-- **Async**: Shared Slack/Discord channel `#hackathon-drugdesign`
-- **Blockers**: Tag `@lead` immediately, don't wait for next sync
-- **Commits**: Small and frequent; PR to `main` only after local test passes
-
----
-
-## Definition of Done (Demo-Ready)
+## Definition of Done
 
 - [ ] Pipeline runs end-to-end without manual intervention
-- [ ] GA search runs **entirely on local scorers** — zero Tamarind calls during search
-- [ ] Tamarind call counter tracked; **≤ 100 calls used total**
-- [ ] **Top-50 candidates** scored with Tamarind ESMFold (~50 calls)
-- [ ] **Top-5 candidates** validated with Tamarind AlphaFold2 multimer (~40 calls)
-- [ ] **Top-5 candidates** displayed on dashboard with all scores and 3D structures
-- [ ] **FP insertion site** visualized on 3D structure of best candidate
-- [ ] **Pareto front** plot: folding confidence vs. binding affinity
-- [ ] 3-minute live demo that tells a clear story
+- [ ] GA runs entirely on local scorers — zero Tamarind calls during search
+- [ ] ≤ 95 Tamarind calls used total
+- [ ] Top chimeric sequences scored with ESMFold (pLDDT)
+- [ ] Top-5 validated with AlphaFold2 multimer (ipTM)
+- [ ] Pareto front: folding confidence vs. binding affinity
+- [ ] AI-generated summary in `results/summary.md`
+- [ ] Dashboard displays top-5 with scores and 3D structures
+- [ ] 3-minute live demo: problem → pipeline → results
 
 ---
 
-*Last updated: Hackathon Day 0 — assign owners before kickoff*
+*Last updated: pipeline fully implemented and tested — ready for real Tamarind run*
