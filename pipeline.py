@@ -54,6 +54,20 @@ FP_SEQUENCE = (
 FP_NAME = "cpGFP"
 LINKER  = "GGSGGS"
 
+# FP insertion site — ECL2 mid-point (residue 160, 0-indexed 159).
+# ECL2 (residues 149–173) is the canonical insertion site for GPCR
+# biosensors: extracellular, accessible, tolerates structural insertions.
+# Reference: Bharat et al. 2023 Nat Methods; Mehta et al. 2014 Science.
+FP_INSERT_POS = 159   # 0-indexed position in SSTR2 where linker starts
+
+# Build chimeric seed: SSTR2[:pos] + LINKER + cpGFP + LINKER + SSTR2[pos:]
+_INSERT_BLOCK = LINKER + FP_SEQUENCE + LINKER   # fixed, never mutated
+CHIMERIC_SEED = (
+    SEED_SEQUENCE[:FP_INSERT_POS]
+    + _INSERT_BLOCK
+    + SEED_SEQUENCE[FP_INSERT_POS:]
+)
+
 # GA settings per round — smaller populations, fewer generations
 GA_ROUNDS = [
     {"population_size": 30, "n_generations": 40, "top_k": 20, "esmfold_quota": 20},
@@ -77,15 +91,17 @@ def log(data: dict):
 # ---------------------------------------------------------------------------
 
 def main():
-    # WT ESMFold baseline — 1 call, cached forever after
-    print("\n=== Baseline: ESMFold WT SSTR2 (1 call, RMSD reference) ===")
-    wt_result = esmfold_plddt(SEED_SEQUENCE)
+    # WT ESMFold baseline — chimeric construct (1 call, RMSD reference)
+    print("\n=== Baseline: ESMFold chimeric SSTR2-cpGFP (1 call, RMSD reference) ===")
+    print(f"[pipeline] Chimeric seed length: {len(CHIMERIC_SEED)} AA "
+          f"(SSTR2 {len(SEED_SEQUENCE)} + insert block {len(_INSERT_BLOCK)})")
+    wt_result = esmfold_plddt(CHIMERIC_SEED)
     wt_pdb    = wt_result.get("pdb")
-    print(f"[pipeline] WT pLDDT: {wt_result.get('plddt')}")
+    print(f"[pipeline] Chimeric WT pLDDT: {wt_result.get('plddt')}")
 
     # Shared state across rounds
-    plddt_cache: dict[str, float] = {}   # sequence → pLDDT, grows each round
-    all_survivors: list[str]      = [SEED_SEQUENCE]  # seed sequences for next round
+    plddt_cache: dict[str, float] = {}    # sequence → pLDDT, grows each round
+    all_survivors: list[str]      = [CHIMERIC_SEED]  # seed chimeric sequences
     all_individuals               = []   # all GA individuals across rounds (for local_fitness lookup)
 
     # -----------------------------------------------------------------------
@@ -108,6 +124,8 @@ def main():
             top_k=cfg["top_k"],
             plddt_cache=plddt_cache,
             round_num=round_idx,
+            insert_pos=FP_INSERT_POS,
+            insert_len=len(_INSERT_BLOCK),
         )
         all_individuals.extend(top_individuals)
 

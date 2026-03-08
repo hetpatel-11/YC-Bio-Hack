@@ -18,26 +18,50 @@ from scorers.ensemble import local_score
 
 AMINO_ACIDS = "ACDEFGHIKLMNPQRSTVWY"
 
-# SSTR2 (369 AA) mutable surface loop positions — 0-indexed.
-# TM helices are fixed. Only extracellular loops (ECLs), intracellular loops
-# (ICLs), and C-terminal tail are mutated.
-# Topology reference: Hoyer et al. 1995; UniProt P30874 topology annotation.
+# SSTR2 loop positions (0-indexed in the BARE 369-AA receptor).
+# The GA operates on chimeric sequences (SSTR2 + inserted FP block), so
+# positions BEFORE the insertion site are unchanged; positions AFTER are
+# shifted by the length of the insert block.  `build_mutable_positions()`
+# computes the correct indices for whatever chimeric sequence is passed.
 #
+# Bare SSTR2 loop regions:
 #   ECL1  : residues  83– 89  → indices  82– 88
 #   ICL2  : residues 117–124  → indices 116–123
-#   ECL2  : residues 149–173  → indices 148–172   ← primary FP insertion region
-#   ICL3  : residues 205–252  → indices 204–251   ← large, tolerates insertions
+#   ECL2  : residues 149–173  → indices 148–172   ← FP inserted here (pos 159)
+#   ICL3  : residues 205–252  → indices 204–251
 #   ECL3  : residues 281–287  → indices 280–286
 #   C-tail: residues 314–369  → indices 313–368
 
-MUTABLE_POSITIONS: list[int] = (
+_BARE_LOOP_POSITIONS: list[int] = (
     list(range(82, 89))     # ECL1
     + list(range(116, 124)) # ICL2
-    + list(range(148, 173)) # ECL2
+    + list(range(148, 173)) # ECL2  (residues before/flanking insertion)
     + list(range(204, 252)) # ICL3
     + list(range(280, 287)) # ECL3
     + list(range(313, 369)) # C-tail
 )
+
+
+def build_mutable_positions(insert_pos: int, insert_len: int) -> list[int]:
+    """
+    Return mutable position indices adjusted for the FP insert block.
+
+    Positions before `insert_pos` are unchanged.
+    Positions >= `insert_pos` are shifted by `insert_len` (the insert block is fixed).
+    Positions that fall INSIDE the insert block are excluded.
+    """
+    positions = []
+    for p in _BARE_LOOP_POSITIONS:
+        if p < insert_pos:
+            positions.append(p)
+        else:
+            # shift past the insert block; skip positions inside the block
+            positions.append(p + insert_len)
+    return positions
+
+
+# Default: no insertion (bare receptor mode)
+MUTABLE_POSITIONS: list[int] = _BARE_LOOP_POSITIONS
 
 # When pLDDT feedback is available, blend local and oracle scores.
 # Higher PLDDT_WEIGHT = more trust in real folding signal.
@@ -56,9 +80,14 @@ class Individual:
 # GA operators
 # ---------------------------------------------------------------------------
 
-def random_mutation(sequence: str, n_mutations: int = 1) -> str:
+def random_mutation(
+    sequence: str,
+    n_mutations: int = 1,
+    positions: list[int] | None = None,
+) -> str:
+    pool = positions if positions is not None else MUTABLE_POSITIONS
     seq = list(sequence)
-    for pos in random.sample(MUTABLE_POSITIONS, min(n_mutations, len(MUTABLE_POSITIONS))):
+    for pos in random.sample(pool, min(n_mutations, len(pool))):
         seq[pos] = random.choice(AMINO_ACIDS)
     return "".join(seq)
 
@@ -113,16 +142,26 @@ def run_ga(
     top_k: int = 20,
     plddt_cache: dict[str, float] | None = None,
     round_num: int = 1,
+    insert_pos: int = 0,
+    insert_len: int = 0,
 ) -> list[Individual]:
     """
     Run the GA and return the top-k individuals by fitness (descending).
 
     Args:
-        seed_sequences: Starting sequences (WT + survivors from previous round).
+        seed_sequences: Starting chimeric sequences (receptor+FP insert).
         plddt_cache:    {sequence: pLDDT} from previous ESMFold rounds.
                         Sequences in cache get blended fitness (local + real pLDDT).
         round_num:      For logging only.
+        insert_pos:     0-indexed position where the FP block starts in the sequence.
+        insert_len:     Length of the FP insert block (linker+FP+linker). Residues
+                        in this range are never mutated.
     """
+    mutable = (
+        build_mutable_positions(insert_pos, insert_len)
+        if insert_len > 0
+        else MUTABLE_POSITIONS
+    )
     # Seed population from provided sequences + random variants
     population: list[Individual] = []
     for seq in seed_sequences:
@@ -130,7 +169,7 @@ def run_ga(
 
     while len(population) < population_size:
         base = random.choice(seed_sequences)
-        mutated = random_mutation(base, n_mutations=random.randint(1, 4))
+        mutated = random_mutation(base, n_mutations=random.randint(1, 4), positions=mutable)
         population.append(Individual(sequence=mutated))
 
     population = [evaluate(ind, fp_name, linker, plddt_cache) for ind in population]
@@ -151,9 +190,9 @@ def run_ga(
                 child_a, child_b = parent_a.sequence, parent_b.sequence
 
             if random.random() < mutation_rate:
-                child_a = random_mutation(child_a)
+                child_a = random_mutation(child_a, positions=mutable)
             if random.random() < mutation_rate:
-                child_b = random_mutation(child_b)
+                child_b = random_mutation(child_b, positions=mutable)
 
             offspring.extend([Individual(sequence=child_a), Individual(sequence=child_b)])
 
