@@ -129,8 +129,7 @@ def _poll(job_name: str) -> dict:
             None,
         )
         if job is None:
-            if attempt % 4 == 0:
-                print(f"[tamarind] job '{job_name}' not found yet ({attempt * POLL_INTERVAL}s)")
+            print(f"[tamarind] job '{job_name}' not found yet ({attempt * POLL_INTERVAL}s)")
             continue
         status = job.get("JobStatus") or job.get("status") or ""
         if status.lower() in ("complete", "completed", "done", "finished"):
@@ -146,8 +145,7 @@ def _poll(job_name: str) -> dict:
             return job
         if status.lower() in ("failed", "error", "stopped"):
             raise RuntimeError(f"Tamarind job '{job_name}' failed (status={status})")
-        if attempt % 4 == 0:
-            print(f"[tamarind] job '{job_name}' status: {status} ({attempt * POLL_INTERVAL}s elapsed)")
+        print(f"[tamarind] job '{job_name}' status: {status} ({attempt * POLL_INTERVAL}s elapsed)")
 
     raise TimeoutError(f"Tamarind job '{job_name}' timed out after {POLL_TIMEOUT * POLL_INTERVAL}s")
 

@@ -88,6 +88,8 @@ async function isPipelineRunning() {
 
 async function startBackgroundPython(scriptName: string) {
   await fs.mkdir(RESULTS_DIR, { recursive: true });
+  const runBanner = `\n=== ${new Date().toISOString()} | starting ${scriptName} ===\n`;
+  await fs.writeFile(LOG_FILE, runBanner, "utf8");
   const logHandle = await fs.open(LOG_FILE, "a");
   const venvPython = path.join(process.cwd(), ".venv", "bin", "python3");
   const pythonExecutable =
@@ -431,7 +433,7 @@ async function buildDashboardData() {
       .split("\n")
       .map((line) => line.trim())
       .filter(Boolean)
-      .slice(-12);
+      .slice(-200);
   }
 
   return {
