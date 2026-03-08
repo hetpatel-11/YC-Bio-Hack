@@ -1,0 +1,6 @@
+requests>=2.31.0
+biopython>=1.83
+numpy>=1.26
+pandas>=2.2
+plotly>=5.20
+anthropic>=0.40.0
