@@ -264,19 +264,9 @@ function buildCandidatesFromRunEvents(runEvents: RunEvent[]): RawCandidate[] {
 
     if (phase.startsWith("ga_")) {
       gaBySequence.set(sequence, event);
-      if (!candidatesBySequence.has(sequence)) {
-        candidatesBySequence.set(sequence, {
-          id: `run-${shortHash(sequence)}`,
-          sequence,
-          fitness: event.fitness,
-          local_fitness: event.fitness,
-          insert_position: event.insert_pos,
-          linker: `${event.linker_n ?? ""}${event.linker_c ?? ""}`,
-          fp_name: "cpGFP",
-        });
-      }
       continue;
     }
+    if (!phase.startsWith("esmfold_") && phase !== "af2") continue;
 
     const ga = gaBySequence.get(sequence);
     const previous = candidatesBySequence.get(sequence) ?? {};
@@ -526,8 +516,11 @@ async function buildDashboardData() {
     : gaEvents.length > 0
     ? "ga_search"
     : "idle";
-  const currentPhase: PipelineStatus["currentPhase"] =
+  let currentPhase: PipelineStatus["currentPhase"] =
     runningState.running && inferredPhase === "idle" ? "ga_search" : inferredPhase;
+  if (!runningState.running && !sourceFile) {
+    currentPhase = "idle";
+  }
 
   const inferredGeneration = hasCompleteResults
     ? 90
