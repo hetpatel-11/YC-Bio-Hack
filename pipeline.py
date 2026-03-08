@@ -62,9 +62,7 @@ FP_NAME = "cpGFP"
 
 # GA settings per round
 GA_ROUNDS = [
-    {"population_size": 30, "n_generations": 40, "top_k": 20, "esmfold_quota": 20},
-    {"population_size": 30, "n_generations": 30, "top_k": 15, "esmfold_quota": 15},
-    {"population_size": 30, "n_generations": 20, "top_k": 10, "esmfold_quota": 10},
+    {"population_size": 30, "n_generations": 40, "top_k": 5, "esmfold_quota": 5},
 ]
 
 TOP_K_AF2 = 5   # final AF2 multimer candidates

@@ -9,9 +9,9 @@ interface InsertionDiagramProps {
   onSelectPosition?: (position: number) => void;
 }
 
-// GPCR with 7 transmembrane helices. The FP (orange blob) always attaches
-// on the extracellular (outer) surface — the small molecule binds outside the cell.
-// The green intracellular reporter activates regardless of which loop is selected.
+// GPCR with 7 transmembrane helices. The FP (cpGFP, orange blob) is inserted
+// into ICL3 — the intracellular loop between TM5 and TM6.
+// ICL3 is the longest and most flexible intracellular loop, ideal for FP insertion.
 
 const NUM_HELICES = 7;
 const HELIX_WIDTH = 24;
@@ -34,14 +34,9 @@ function helixCx(i: number) {
   return BLOCK_X + i * (HELIX_WIDTH + HELIX_GAP) + HELIX_WIDTH / 2;
 }
 
-// Map an insertion position to which inter-helix gap (0 = before H1 n-term, 1 = between H1-H2, … 6 = between H6-H7)
-// We have 5 sites; spread them across loops 1-5
-function positionToLoopIndex(position: number, allPositions: number[]): number {
-  const sorted = [...allPositions].sort((a, b) => b - a);
-  const idx = sorted.indexOf(position);
-  // Map to loops 1–5  (between helices i and i+1)
-  return Math.min(Math.max(idx + 1, 1), 5);
-}
+// ICL3 is always between TM5 and TM6 (helix indices 4 and 5, 0-based).
+// Loop index 5 in our 1-based scheme. Always intracellular (below membrane).
+const ICL3_LOOP_INDEX = 5; // between helix 4 and helix 5 (0-indexed)
 
 // Loop path: connects the top/bottom edge of two adjacent helices with a bezier arc
 function loopPath(x1: number, x2: number, baseY: number, up: boolean, amp = 26): string {
@@ -78,16 +73,13 @@ export function InsertionDiagram({ sites, selectedPosition, onSelectPosition }: 
   const sortedSites = [...sites].sort((a, b) => b.score - a.score);
   const activePosition = selectedPosition ?? sortedSites[0]?.position ?? null;
 
-  const allPositions = sites.map((s) => s.position);
-  const activeLoopIndex =
-    activePosition !== null ? positionToLoopIndex(activePosition, allPositions) : 2;
-
-  // The FP always sits on the EXTRACELLULAR side (outer surface of cell)
-  // It lands at the extracellular end of the active loop
-  const loopHelixA = activeLoopIndex - 1;
-  const loopHelixB = activeLoopIndex;
+  // ICL3 is fixed: always between TM5 (helix index 4) and TM6 (helix index 5)
+  const activeLoopIndex = ICL3_LOOP_INDEX;
+  const loopHelixA = activeLoopIndex - 1; // helix 4 (TM5)
+  const loopHelixB = activeLoopIndex;     // helix 5 (TM6)
   const fpX = (helixCx(loopHelixA) + helixCx(loopHelixB)) / 2;
-  const fpY = MEMBRANE_Y - 60; // always above the membrane (extracellular)
+  // ICL3 is intracellular — FP sits BELOW the membrane
+  const fpY = MEMBRANE_Y + HELIX_HEIGHT + 48;
 
   // Reporter glows whenever any FP is inserted (always activated since binding always happens)
   const reporterActive = activePosition !== null;
@@ -97,8 +89,8 @@ export function InsertionDiagram({ sites, selectedPosition, onSelectPosition }: 
       <div className="mb-4">
         <h2 className="text-sm font-semibold text-foreground">FP Insertion Site Visualization</h2>
         <p className="text-xs text-muted-foreground mt-1">
-          The fluorescent protein (orange) binds on the extracellular surface. Select a candidate
-          to see which loop it targets.
+          cpGFP (orange) is inserted into <strong>ICL3</strong> — the intracellular loop between TM5 and TM6.
+          Select a candidate to see its exact insertion position within ICL3 (residues 205–252).
         </p>
       </div>
 
@@ -182,10 +174,17 @@ export function InsertionDiagram({ sites, selectedPosition, onSelectPosition }: 
           <text x={helixCx(NUM_HELICES - 1) + 28} y={MEMBRANE_Y + HELIX_HEIGHT + 52} fontSize={8} fill="#6b7280" textAnchor="middle">C</text>
 
           {/* ── Connecting loops ── */}
+          {/* GPCR topology with N-terminus extracellular:
+              TM1→TM2: ICL1 (intracellular, down), loop 1
+              TM2→TM3: ECL1 (extracellular, up),   loop 2
+              TM3→TM4: ICL2 (intracellular, down),  loop 3
+              TM4→TM5: ECL2 (extracellular, up),    loop 4
+              TM5→TM6: ICL3 (intracellular, down),  loop 5 ← cpGFP here
+              TM6→TM7: ECL3 (extracellular, up),    loop 6 */}
           {Array.from({ length: NUM_HELICES - 1 }).map((_, i) => {
             const loopIdx = i + 1;
-            // Loops alternate: odd = extracellular, even = intracellular
-            const up = loopIdx % 2 === 1;
+            // Even loops = extracellular (up), odd loops = intracellular (down)
+            const up = loopIdx % 2 === 0;
             const x1 = helixCx(i) + HELIX_WIDTH / 2 - 1;
             const x2 = helixCx(i + 1) - HELIX_WIDTH / 2 + 1;
             const baseY = up ? MEMBRANE_Y - 10 : MEMBRANE_Y + HELIX_HEIGHT - 10;
@@ -193,10 +192,10 @@ export function InsertionDiagram({ sites, selectedPosition, onSelectPosition }: 
             return (
               <path
                 key={i}
-                d={loopPath(x1, x2, baseY, up, isActive ? 30 : 22)}
+                d={loopPath(x1, x2, baseY, up, isActive ? 34 : 22)}
                 fill="none"
-                stroke={isActive ? "#7a1a7a" : "#4a1a7a"}
-                strokeWidth={isActive ? 2.5 : 1.8}
+                stroke={isActive ? "#f97316" : "#4a1a7a"}
+                strokeWidth={isActive ? 2.8 : 1.8}
                 strokeLinecap="round"
               />
             );
@@ -247,20 +246,20 @@ export function InsertionDiagram({ sites, selectedPosition, onSelectPosition }: 
             reporter
           </text>
 
-          {/* ── FP blob — always extracellular ── */}
-          <FpBlob cx={fpX} cy={fpY} r={20} active={reporterActive} />
+          {/* ── cpGFP blob — intracellular, below membrane, at ICL3 ── */}
+          <FpBlob cx={fpX} cy={fpY} r={22} active={reporterActive} />
 
           {/* FP label */}
-          <text x={fpX} y={fpY - 28} fontSize={9} fill="#ea580c" textAnchor="middle" fontWeight="700">
-            FP@{activePosition ?? "—"}
+          <text x={fpX} y={fpY + 34} fontSize={9} fill="#ea580c" textAnchor="middle" fontWeight="700">
+            cpGFP@ICL3{activePosition ? ` (pos ${activePosition})` : ""}
           </text>
 
-          {/* Arrow from FP down to insertion loop */}
+          {/* Arrow from FP up to ICL3 loop */}
           <line
             x1={fpX}
-            y1={fpY + 22}
+            y1={fpY - 24}
             x2={fpX}
-            y2={MEMBRANE_Y - 14}
+            y2={MEMBRANE_Y + HELIX_HEIGHT + 4}
             stroke="#f97316"
             strokeWidth={1.5}
             strokeDasharray="4 3"
@@ -277,13 +276,11 @@ export function InsertionDiagram({ sites, selectedPosition, onSelectPosition }: 
       {/* ── Insertion site selector ── */}
       <div className="mt-4 border-t border-border pt-3">
         <p className="text-xs text-muted-foreground mb-2 font-medium">
-          Candidate extracellular insertion positions:
+          ICL3 insertion positions (residues 205–252):
         </p>
         <div className="flex flex-wrap gap-2">
           {sortedSites.map((site) => {
             const isSelected = site.position === activePosition;
-            const loopIdx = positionToLoopIndex(site.position, allPositions);
-            const up = loopIdx % 2 === 1;
             return (
               <button
                 key={site.position}
@@ -295,14 +292,8 @@ export function InsertionDiagram({ sites, selectedPosition, onSelectPosition }: 
                 }`}
               >
                 <span className="font-mono">@{site.position}</span>
-                <span
-                  className={`text-[10px] px-1 rounded ${
-                    up
-                      ? "bg-blue-100 text-blue-600"
-                      : "bg-emerald-100 text-emerald-600"
-                  }`}
-                >
-                  {up ? "ECL" : "ICL"}
+                <span className="text-[10px] px-1 rounded bg-emerald-100 text-emerald-700">
+                  ICL3
                 </span>
                 <span className="opacity-60">{(site.score * 100).toFixed(0)}%</span>
               </button>
