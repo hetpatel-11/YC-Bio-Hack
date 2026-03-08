@@ -245,65 +245,6 @@ async function readRawCandidates() {
   return { candidates: [] as RawCandidate[], sourceFile: null as string | null };
 }
 
-function shortHash(input: string) {
-  let hash = 0;
-  for (let i = 0; i < input.length; i++) {
-    hash = (hash * 31 + input.charCodeAt(i)) >>> 0;
-  }
-  return hash.toString(36).padStart(7, "0").slice(0, 7);
-}
-
-function buildCandidatesFromRunEvents(runEvents: RunEvent[]): RawCandidate[] {
-  const gaBySequence = new Map<string, RunEvent>();
-  const candidatesBySequence = new Map<string, RawCandidate>();
-
-  for (const event of runEvents) {
-    const phase = typeof event.phase === "string" ? event.phase : "";
-    const chains = Array.isArray(event.chains) ? event.chains : [];
-    const sequence = firstString([event.sequence, chains[0]]);
-    if (!sequence) continue;
-
-    if (phase.startsWith("ga_")) {
-      gaBySequence.set(sequence, event);
-      continue;
-    }
-    if (!phase.startsWith("esmfold_") && phase !== "af2") continue;
-
-    const ga = gaBySequence.get(sequence);
-    const previous = candidatesBySequence.get(sequence) ?? {};
-    const merged: RawCandidate = {
-      ...previous,
-      id: firstString([previous.id, `run-${shortHash(sequence)}`]),
-      sequence,
-      fp_name: firstString([event.fp_name, previous.fp_name, "cpGFP"]),
-      fitness: toNumber(ga?.fitness) ?? toNumber(previous.fitness),
-      local_fitness:
-        toNumber(event.local_fitness) ??
-        toNumber(ga?.fitness) ??
-        toNumber(previous.local_fitness) ??
-        toNumber(previous.fitness),
-      insert_position:
-        toNumber(event.insert_pos) ??
-        toNumber(ga?.insert_pos) ??
-        toNumber(previous.insert_position),
-      linker:
-        firstString([
-          event.linker,
-          `${ga?.linker_n ?? ""}${ga?.linker_c ?? ""}`,
-          previous.linker,
-        ]) ?? "GGSGGS",
-      plddt: toNumber(event.plddt) ?? toNumber(previous.plddt),
-      ptm: toNumber(event.ptm) ?? toNumber(previous.ptm),
-      iptm: toNumber(event.iptm) ?? toNumber(previous.iptm),
-      chains: chains.length > 0 ? chains : previous.chains,
-      pdb_file: firstString([event.pdb_file, previous.pdb_file]),
-    };
-    candidatesBySequence.set(sequence, merged);
-  }
-
-  return [...candidatesBySequence.values()];
-}
-
 function candidateSortValue(candidate: Candidate) {
   return (
     candidate.scores.iptm * 0.4 +
@@ -398,16 +339,8 @@ async function buildDashboardData() {
 
   const runEvents = latestRun.events;
   const usingFileCandidates = fileCandidates.length > 0;
-  const fallbackCandidates = fileCandidates.length === 0
-    ? buildCandidatesFromRunEvents(runEvents)
-    : [];
-  const rawCandidates = fileCandidates.length > 0 ? fileCandidates : fallbackCandidates;
-  const sourceFile =
-    fileCandidates.length > 0
-      ? fileSource
-      : fallbackCandidates.length > 0 && latestRun.sourceFile
-      ? `runs/${latestRun.sourceFile}`
-      : null;
+  const rawCandidates = fileCandidates;
+  const sourceFile = fileSource;
 
   const candidatesBase = rawCandidates.map((raw, index) => {
     const rawNested = raw.raw && typeof raw.raw === "object"

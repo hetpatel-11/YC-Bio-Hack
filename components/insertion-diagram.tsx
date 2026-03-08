@@ -1,24 +1,28 @@
 "use client";
 
+import type { Candidate, InsertionSite } from "@/lib/types";
 import { useState } from "react";
-import type { InsertionSite } from "@/lib/types";
 
 interface InsertionDiagramProps {
   sites: InsertionSite[];
   selectedPosition: number | null;
+  selectedCandidate?: Candidate | null;
   onSelectPosition?: (position: number) => void;
 }
-
-// GPCR with 7 transmembrane helices. The FP (orange blob) always attaches
-// on the extracellular (outer) surface — the small molecule binds outside the cell.
-// The green intracellular reporter activates regardless of which loop is selected.
 
 const NUM_HELICES = 7;
 const HELIX_WIDTH = 24;
 const HELIX_HEIGHT = 82;
 const HELIX_GAP = 14;
-const HELIX_COLOR = "#b040a0";
-const HELIX_STROKE = "#7a1a7a";
+const HELIX_COLOR = "#7c3aed";
+const HELIX_STROKE = "#5b21b6";
+const ICL3_COLOR = "#06b6d4";
+const CPGFP_COLOR = "#22c55e";
+const CPGFP_STROKE = "#15803d";
+const INSERTION_COLOR = "#f97316";
+const INSERTION_STROKE = "#ea580c";
+const REPORTER_COLOR = "#eab308";
+const REPORTER_STROKE = "#a16207";
 
 const SVG_W = 600;
 const SVG_H = 280;
@@ -26,6 +30,8 @@ const SVG_H = 280;
 // Membrane sits in the middle
 const MEMBRANE_Y = 110;
 const MEMBRANE_H = 44;
+const ICL3_START = 205;
+const ICL3_END = 252;
 
 const BLOCK_W = NUM_HELICES * HELIX_WIDTH + (NUM_HELICES - 1) * HELIX_GAP;
 const BLOCK_X = (SVG_W - BLOCK_W) / 2;
@@ -34,27 +40,27 @@ function helixCx(i: number) {
   return BLOCK_X + i * (HELIX_WIDTH + HELIX_GAP) + HELIX_WIDTH / 2;
 }
 
-// Map an insertion position to which inter-helix gap (0 = before H1 n-term, 1 = between H1-H2, … 6 = between H6-H7)
-// We have 5 sites; spread them across loops 1-5
-function positionToLoopIndex(position: number, allPositions: number[]): number {
-  const sorted = [...allPositions].sort((a, b) => b - a);
-  const idx = sorted.indexOf(position);
-  // Map to loops 1–5  (between helices i and i+1)
-  return Math.min(Math.max(idx + 1, 1), 5);
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
 }
 
-// Loop path: connects the top/bottom edge of two adjacent helices with a bezier arc
-function loopPath(x1: number, x2: number, baseY: number, up: boolean, amp = 26): string {
+// Loop path: connects edges of two adjacent helices with a bezier arc
+function loopPath(x1: number, x2: number, baseY: number, up: boolean, amp = 24): string {
   const mid = (x1 + x2) / 2;
   const peak = up ? baseY - amp : baseY + amp;
   return `M ${x1} ${baseY} Q ${mid} ${peak} ${x2} ${baseY}`;
+}
+
+function quadBezierY(t: number, y0: number, y1: number, y2: number) {
+  const u = 1 - t;
+  return u * u * y0 + 2 * u * t * y1 + t * t * y2;
 }
 
 function FpBlob({ cx, cy, r, active }: { cx: number; cy: number; r: number; active: boolean }) {
   return (
     <g>
       {active && (
-        <circle cx={cx} cy={cy} r={r + 12} fill="#f97316" opacity={0.15} />
+        <circle cx={cx} cy={cy} r={r + 10} fill={CPGFP_COLOR} opacity={0.15} />
       )}
       <path
         d={`
@@ -64,8 +70,8 @@ function FpBlob({ cx, cy, r, active }: { cx: number; cy: number; r: number; acti
           C ${cx - r * 1.4} ${cy - r * 0.1}, ${cx - r * 1.1} ${cy - r * 0.9}, ${cx} ${cy - r}
           Z
         `}
-        fill="#f97316"
-        stroke="#ea580c"
+        fill={CPGFP_COLOR}
+        stroke={CPGFP_STROKE}
         strokeWidth={1.2}
         opacity={0.92}
       />
@@ -74,39 +80,97 @@ function FpBlob({ cx, cy, r, active }: { cx: number; cy: number; r: number; acti
   );
 }
 
-export function InsertionDiagram({ sites, selectedPosition, onSelectPosition }: InsertionDiagramProps) {
+export function InsertionDiagram({
+  sites,
+  selectedPosition,
+  selectedCandidate = null,
+  onSelectPosition,
+}: InsertionDiagramProps) {
+  const [zoom, setZoom] = useState(1);
   const sortedSites = [...sites].sort((a, b) => b.score - a.score);
-  const activePosition = selectedPosition ?? sortedSites[0]?.position ?? null;
+  const activePosition =
+    selectedCandidate?.insertionPosition ?? selectedPosition ?? sortedSites[0]?.position ?? null;
+  const activeSite =
+    activePosition !== null
+      ? sortedSites.find((site) => site.position === activePosition) ?? null
+      : null;
 
-  const allPositions = sites.map((s) => s.position);
-  const activeLoopIndex =
-    activePosition !== null ? positionToLoopIndex(activePosition, allPositions) : 2;
+  // ICL3 is between TM5 and TM6 in this topology model.
+  const loopHelixA = 4;
+  const loopHelixB = 5;
+  const x1 = helixCx(loopHelixA) + HELIX_WIDTH / 2 - 1;
+  const x2 = helixCx(loopHelixB) - HELIX_WIDTH / 2 + 1;
+  const baseY = MEMBRANE_Y + HELIX_HEIGHT - 10;
+  const peakY = baseY + 30;
 
-  // The FP always sits on the EXTRACELLULAR side (outer surface of cell)
-  // It lands at the extracellular end of the active loop
-  const loopHelixA = activeLoopIndex - 1;
-  const loopHelixB = activeLoopIndex;
-  const fpX = (helixCx(loopHelixA) + helixCx(loopHelixB)) / 2;
-  const fpY = MEMBRANE_Y - 60; // always above the membrane (extracellular)
+  const insertionNorm =
+    activePosition !== null
+      ? clamp((activePosition - ICL3_START) / (ICL3_END - ICL3_START), 0, 1)
+      : 0.5;
+  const insertionX = x1 + (x2 - x1) * insertionNorm;
+  const insertionY = quadBezierY(insertionNorm, baseY, peakY, baseY);
 
-  // Reporter glows whenever any FP is inserted (always activated since binding always happens)
-  const reporterActive = activePosition !== null;
+  const fpX = insertionX;
+  const fpY = insertionY + 22;
+
+  const reporterAttached = Boolean(
+    selectedCandidate?.pdbData &&
+      selectedCandidate.sequence &&
+      Number.isFinite(selectedCandidate.insertionPosition)
+  );
+  const signalStrength = reporterAttached && selectedCandidate
+    ? clamp(selectedCandidate.scores.plddt * 0.65 + selectedCandidate.scores.iptm * 0.35, 0, 1)
+    : 0;
+  const reporterX = fpX + 42;
+  const reporterY = fpY + 18;
+  const glowRadius = 15 + signalStrength * 18;
+  const glowOpacity = 0.12 + signalStrength * 0.38;
+  const pulseDurationSec = (2.8 - signalStrength * 1.6).toFixed(2);
+  const pulseRadiusLow = Math.max(10, glowRadius * 0.72).toFixed(2);
+  const pulseRadiusHigh = glowRadius.toFixed(2);
+  const pulseOpacityLow = Math.max(0.08, glowOpacity * 0.42).toFixed(3);
+  const pulseOpacityHigh = glowOpacity.toFixed(3);
+  const zoomPercent = Math.round(zoom * 100);
+
+  const zoomOut = () => setZoom((z) => Math.max(0.7, Number((z - 0.1).toFixed(2))));
+  const zoomIn = () => setZoom((z) => Math.min(1.8, Number((z + 0.1).toFixed(2))));
 
   return (
     <div className="bg-card border border-border rounded-lg p-5">
-      <div className="mb-4">
-        <h2 className="text-sm font-semibold text-foreground">FP Insertion Site Visualization</h2>
-        <p className="text-xs text-muted-foreground mt-1">
-          The fluorescent protein (orange) binds on the extracellular surface. Select a candidate
-          to see which loop it targets.
-        </p>
+      <div className="mb-4 flex items-start justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold text-foreground">FP Insertion Site Visualization</h2>
+          <p className="text-xs text-muted-foreground mt-1">
+            Data-driven ICL3 insertion model (SSTR2 residues {ICL3_START}-{ICL3_END}).
+            cpGFP is attached at the selected insertion residue.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={zoomOut}
+            className="px-2 py-1 text-xs rounded-md border border-border hover:bg-secondary"
+            aria-label="Zoom out insertion diagram"
+          >
+            -
+          </button>
+          <span className="text-[11px] text-muted-foreground w-10 text-center">{zoomPercent}%</span>
+          <button
+            type="button"
+            onClick={zoomIn}
+            className="px-2 py-1 text-xs rounded-md border border-border hover:bg-secondary"
+            aria-label="Zoom in insertion diagram"
+          >
+            +
+          </button>
+        </div>
       </div>
 
       <div className="flex justify-center overflow-x-auto">
         <svg
           viewBox={`0 0 ${SVG_W} ${SVG_H}`}
-          width={SVG_W}
-          height={SVG_H}
+          width={SVG_W * zoom}
+          height={SVG_H * zoom}
           className="max-w-full"
           aria-label="GPCR FP insertion site diagram"
         >
@@ -139,7 +203,7 @@ export function InsertionDiagram({ sites, selectedPosition, onSelectPosition }: 
             y={MEMBRANE_Y}
             width={BLOCK_W + 48}
             height={MEMBRANE_H / 2}
-            fill="#e2e8f0"
+            fill="#d9f99d"
             rx={3}
           />
           <rect
@@ -147,7 +211,7 @@ export function InsertionDiagram({ sites, selectedPosition, onSelectPosition }: 
             y={MEMBRANE_Y + MEMBRANE_H / 2}
             width={BLOCK_W + 48}
             height={MEMBRANE_H / 2}
-            fill="#cbd5e1"
+            fill="#bef264"
             rx={3}
           />
           {/* Phospholipid heads */}
@@ -155,8 +219,8 @@ export function InsertionDiagram({ sites, selectedPosition, onSelectPosition }: 
             const x = BLOCK_X - 14 + i * ((BLOCK_W + 28) / 20);
             return (
               <g key={i}>
-                <ellipse cx={x} cy={MEMBRANE_Y + 7} rx={5} ry={4} fill="#94a3b8" opacity={0.55} />
-                <ellipse cx={x} cy={MEMBRANE_Y + MEMBRANE_H - 7} rx={5} ry={4} fill="#94a3b8" opacity={0.55} />
+                <ellipse cx={x} cy={MEMBRANE_Y + 7} rx={5} ry={4} fill="#a3e635" opacity={0.65} />
+                <ellipse cx={x} cy={MEMBRANE_Y + MEMBRANE_H - 7} rx={5} ry={4} fill="#a3e635" opacity={0.65} />
               </g>
             );
           })}
@@ -165,7 +229,7 @@ export function InsertionDiagram({ sites, selectedPosition, onSelectPosition }: 
           <path
             d={`M ${helixCx(0)} ${MEMBRANE_Y - 10} C ${helixCx(0) - 18} ${MEMBRANE_Y - 46}, ${helixCx(0) - 36} ${MEMBRANE_Y - 56}, ${helixCx(0) - 46} ${MEMBRANE_Y - 42}`}
             fill="none"
-            stroke="#4a1a7a"
+            stroke="#1e3a8a"
             strokeWidth={2}
             strokeLinecap="round"
           />
@@ -175,7 +239,7 @@ export function InsertionDiagram({ sites, selectedPosition, onSelectPosition }: 
           <path
             d={`M ${helixCx(NUM_HELICES - 1)} ${MEMBRANE_Y + HELIX_HEIGHT - 10} C ${helixCx(NUM_HELICES - 1) + 18} ${MEMBRANE_Y + HELIX_HEIGHT + 18}, ${helixCx(NUM_HELICES - 1) + 28} ${MEMBRANE_Y + HELIX_HEIGHT + 36}, ${helixCx(NUM_HELICES - 1) + 18} ${MEMBRANE_Y + HELIX_HEIGHT + 46}`}
             fill="none"
-            stroke="#4a1a7a"
+            stroke="#1e3a8a"
             strokeWidth={2}
             strokeLinecap="round"
           />
@@ -183,20 +247,18 @@ export function InsertionDiagram({ sites, selectedPosition, onSelectPosition }: 
 
           {/* ── Connecting loops ── */}
           {Array.from({ length: NUM_HELICES - 1 }).map((_, i) => {
-            const loopIdx = i + 1;
-            // Loops alternate: odd = extracellular, even = intracellular
-            const up = loopIdx % 2 === 1;
-            const x1 = helixCx(i) + HELIX_WIDTH / 2 - 1;
-            const x2 = helixCx(i + 1) - HELIX_WIDTH / 2 + 1;
-            const baseY = up ? MEMBRANE_Y - 10 : MEMBRANE_Y + HELIX_HEIGHT - 10;
-            const isActive = loopIdx === activeLoopIndex;
+            const isIcl3 = i === loopHelixA;
+            const up = i % 2 === 1;
+            const loopStartX = helixCx(i) + HELIX_WIDTH / 2 - 1;
+            const loopEndX = helixCx(i + 1) - HELIX_WIDTH / 2 + 1;
+            const loopBaseY = up ? MEMBRANE_Y - 10 : MEMBRANE_Y + HELIX_HEIGHT - 10;
             return (
               <path
                 key={i}
-                d={loopPath(x1, x2, baseY, up, isActive ? 30 : 22)}
+                d={loopPath(loopStartX, loopEndX, loopBaseY, up, isIcl3 ? 30 : 18)}
                 fill="none"
-                stroke={isActive ? "#7a1a7a" : "#4a1a7a"}
-                strokeWidth={isActive ? 2.5 : 1.8}
+                stroke={isIcl3 ? ICL3_COLOR : "#64748b"}
+                strokeWidth={isIcl3 ? 2.6 : 1.3}
                 strokeLinecap="round"
               />
             );
@@ -217,55 +279,87 @@ export function InsertionDiagram({ sites, selectedPosition, onSelectPosition }: 
             />
           ))}
 
-          {/* ── Intracellular reporter (green ball) ── */}
-          {reporterActive && (
-            <circle
-              cx={helixCx(3)}
-              cy={MEMBRANE_Y + HELIX_HEIGHT + 32}
-              r={24}
-              fill="#22c55e"
-              opacity={0.2}
-              filter="url(#glow)"
-            />
+          {/* ICL3 position marker (real residue index within 205-252 window) */}
+          {activePosition !== null && (
+            <g>
+              <circle cx={insertionX} cy={insertionY} r={4.4} fill={INSERTION_COLOR} stroke={INSERTION_STROKE} strokeWidth={1} />
+              <text x={insertionX} y={insertionY + 18} fontSize={8} fill={INSERTION_COLOR} textAnchor="middle">
+                ICL3 @{activePosition}
+              </text>
+            </g>
           )}
-          <circle
-            cx={helixCx(3)}
-            cy={MEMBRANE_Y + HELIX_HEIGHT + 32}
-            r={11}
-            fill={reporterActive ? "#22c55e" : "#86efac"}
-            stroke={reporterActive ? "#16a34a" : "#4ade80"}
-            strokeWidth={1.5}
-          />
-          <circle cx={helixCx(3) - 3} cy={MEMBRANE_Y + HELIX_HEIGHT + 28} r={3.5} fill="white" opacity={0.45} />
-          <text
-            x={helixCx(3) + 16}
-            y={MEMBRANE_Y + HELIX_HEIGHT + 36}
-            fontSize={9}
-            fill="#16a34a"
-            fontWeight="600"
-          >
-            reporter
+
+          {/* FP module attached at insertion site */}
+          <FpBlob cx={fpX} cy={fpY} r={18} active={reporterAttached} />
+          <text x={fpX} y={fpY - 26} fontSize={9} fill={CPGFP_STROKE} textAnchor="middle" fontWeight="700">
+            cpGFP
           </text>
 
-          {/* ── FP blob — always extracellular ── */}
-          <FpBlob cx={fpX} cy={fpY} r={20} active={reporterActive} />
-
-          {/* FP label */}
-          <text x={fpX} y={fpY - 28} fontSize={9} fill="#ea580c" textAnchor="middle" fontWeight="700">
-            FP@{activePosition ?? "—"}
-          </text>
-
-          {/* Arrow from FP down to insertion loop */}
+          {/* Physical attachment tether (insertion -> cpGFP -> reporter) */}
           <line
-            x1={fpX}
-            y1={fpY + 22}
+            x1={insertionX}
+            y1={insertionY + 5}
             x2={fpX}
-            y2={MEMBRANE_Y - 14}
-            stroke="#f97316"
+            y2={fpY - 16}
+            stroke={INSERTION_COLOR}
             strokeWidth={1.5}
             strokeDasharray="4 3"
             markerEnd="url(#arrowOrange)"
           />
+          <line
+            x1={fpX + 18}
+            y1={fpY + 6}
+            x2={reporterX - 13}
+            y2={reporterY - 2}
+            stroke={reporterAttached ? REPORTER_COLOR : "#94a3b8"}
+            strokeWidth={2}
+          />
+
+          {/* Reporter pulse is gated by real attachment + confidence scores from the selected candidate */}
+          {reporterAttached && (
+            <circle
+              cx={reporterX}
+              cy={reporterY}
+              r={glowRadius}
+              fill={REPORTER_COLOR}
+              opacity={glowOpacity}
+              filter="url(#glow)"
+            >
+              <animate
+                attributeName="opacity"
+                values={`${pulseOpacityLow};${pulseOpacityHigh};${pulseOpacityLow}`}
+                dur={`${pulseDurationSec}s`}
+                repeatCount="indefinite"
+              />
+              <animate
+                attributeName="r"
+                values={`${pulseRadiusLow};${pulseRadiusHigh};${pulseRadiusLow}`}
+                dur={`${pulseDurationSec}s`}
+                repeatCount="indefinite"
+              />
+            </circle>
+          )}
+          <circle
+            cx={reporterX}
+            cy={reporterY}
+            r={11}
+            fill={reporterAttached ? REPORTER_COLOR : "#cbd5e1"}
+            stroke={reporterAttached ? REPORTER_STROKE : "#94a3b8"}
+            strokeWidth={1.5}
+          />
+          <circle cx={reporterX - 3} cy={reporterY - 4} r={3.5} fill="white" opacity={0.45} />
+          <text
+            x={reporterX + 16}
+            y={reporterY + 4}
+            fontSize={9}
+            fill={reporterAttached ? REPORTER_STROKE : "#64748b"}
+            fontWeight="600"
+          >
+            reporter {reporterAttached ? "attached" : "detached"}
+          </text>
+          <text x={reporterX} y={reporterY + 24} fontSize={8} fill="#9ca3af" textAnchor="middle">
+            signal {(signalStrength * 100).toFixed(0)}%
+          </text>
 
           {/* ── GPCR badge ── */}
           <text x={SVG_W - 10} y={SVG_H - 8} fontSize={9} fill="#d1d5db" textAnchor="end">
@@ -275,15 +369,21 @@ export function InsertionDiagram({ sites, selectedPosition, onSelectPosition }: 
       </div>
 
       {/* ── Insertion site selector ── */}
-      <div className="mt-4 border-t border-border pt-3">
+      <div className="mt-4 border-t border-border pt-3 space-y-3">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-[11px]">
+          <LegendItem color={HELIX_COLOR} label="TM helices (SSTR2)" />
+          <LegendItem color={ICL3_COLOR} label="ICL3 loop (205-252)" />
+          <LegendItem color={CPGFP_COLOR} label="cpGFP insertion" />
+          <LegendItem color={INSERTION_COLOR} label="Insertion residue" />
+          <LegendItem color={REPORTER_COLOR} label="Reporter (attached)" />
+        </div>
+
         <p className="text-xs text-muted-foreground mb-2 font-medium">
-          Candidate extracellular insertion positions:
+          Candidate ICL3 insertion positions:
         </p>
         <div className="flex flex-wrap gap-2">
           {sortedSites.map((site) => {
             const isSelected = site.position === activePosition;
-            const loopIdx = positionToLoopIndex(site.position, allPositions);
-            const up = loopIdx % 2 === 1;
             return (
               <button
                 key={site.position}
@@ -295,21 +395,28 @@ export function InsertionDiagram({ sites, selectedPosition, onSelectPosition }: 
                 }`}
               >
                 <span className="font-mono">@{site.position}</span>
-                <span
-                  className={`text-[10px] px-1 rounded ${
-                    up
-                      ? "bg-blue-100 text-blue-600"
-                      : "bg-emerald-100 text-emerald-600"
-                  }`}
-                >
-                  {up ? "ECL" : "ICL"}
-                </span>
+                <span className="text-[10px] px-1 rounded bg-sky-100 text-sky-700">ICL3</span>
                 <span className="opacity-60">{(site.score * 100).toFixed(0)}%</span>
               </button>
             );
           })}
         </div>
+
+        <p className="text-[11px] text-muted-foreground">
+          {activeSite
+            ? `Selected site @${activeSite.position} with score ${(activeSite.score * 100).toFixed(1)}%. Reporter glow uses real pLDDT/ipTM from the selected candidate.`
+            : "Select a site to inspect insertion attachment."}
+        </p>
       </div>
+    </div>
+  );
+}
+
+function LegendItem({ color, label }: { color: string; label: string }) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ backgroundColor: color }} />
+      <span>{label}</span>
     </div>
   );
 }
