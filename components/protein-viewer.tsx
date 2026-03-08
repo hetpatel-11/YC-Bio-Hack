@@ -203,11 +203,9 @@ export function ProteinViewer({ candidate }: ProteinViewerProps) {
     setError(null);
     setSourceLabel(null);
 
-    if (!candidate) {
-      return;
-    }
-
-    const pdbUrl = candidate.pdbData || `/api/pdb?candidateId=${encodeURIComponent(candidate.id)}`;
+    const pdbUrl = candidate
+      ? candidate.pdbData || `/api/pdb?candidateId=${encodeURIComponent(candidate.id)}`
+      : "/api/pdb";
     setIsLoading(true);
 
     loader.load(
@@ -239,10 +237,11 @@ export function ProteinViewer({ candidate }: ProteinViewerProps) {
         group.add(atoms);
 
         const atomRecords = Array.isArray(result.json?.atoms) ? result.json.atoms : [];
-        if (atomRecords.length > 0 && candidate.insertionPosition) {
+        const insertionPosition = candidate?.insertionPosition;
+        if (atomRecords.length > 0 && insertionPosition) {
           const insertionPositions: number[] = [];
           for (const atom of atomRecords) {
-            if (Number(atom?.resi) === candidate.insertionPosition) {
+            if (Number(atom?.resi) === insertionPosition) {
               insertionPositions.push(atom.x, atom.y, atom.z);
             }
           }
@@ -341,7 +340,7 @@ export function ProteinViewer({ candidate }: ProteinViewerProps) {
           <p className="text-xs text-muted-foreground mt-0.5">
             {candidate
               ? `Three.js PDB view for ${candidate.id}`
-              : "Select a candidate to view"}
+              : "Latest PDB from results/ via /api/pdb"}
           </p>
           {sourceLabel && (
             <p className="text-[11px] text-muted-foreground/80 mt-0.5 font-mono">
@@ -392,9 +391,9 @@ export function ProteinViewer({ candidate }: ProteinViewerProps) {
           zoom {zoom.toFixed(2)}x
         </div>
 
-        {!candidate && (
+        {!candidate && !sourceLabel && !isLoading && !error && (
           <div className="absolute inset-0 flex items-center justify-center">
-            <p className="text-sm text-muted-foreground">No candidate selected</p>
+            <p className="text-sm text-muted-foreground">Waiting for results PDB...</p>
           </div>
         )}
 

@@ -10,7 +10,7 @@ type RunEvent = {
   sequence?: string;
   fitness?: number;
 };
-type PipelineMode = "live" | "mock" | "none";
+type PipelineMode = "live" | "none";
 
 const RESULTS_DIR = path.join(process.cwd(), "results");
 const RUNS_DIR = path.join(RESULTS_DIR, "runs");
@@ -19,7 +19,6 @@ const LOG_FILE = path.join(RESULTS_DIR, "pipeline.log");
 const CANDIDATE_FILES = [
   "af2_results.json",
   "top5.json",
-  "test_run.json",
 ];
 const KNOWN_LINKERS = ["GGSGGS", "GSGSGS", "GGGGS", "GS"];
 const FALLBACK_INSERTION_POSITIONS = [84, 121, 161, 228, 284];
@@ -422,12 +421,8 @@ async function buildDashboardData() {
   };
 
   const tamarindConfigured = Boolean(process.env.TAMARIND_API_KEY);
-  const mode: PipelineMode =
-    sourceFile === "test_run.json" && !runningState.running
-      ? "mock"
-      : sourceFile || runningState.running
-      ? "live"
-      : "none";
+  const anthropicConfigured = Boolean(process.env.ANTHROPIC_API_KEY);
+  const mode: PipelineMode = sourceFile || runningState.running ? "live" : "none";
 
   let recentLogTail: string[] = [];
   if (await exists(LOG_FILE)) {
@@ -448,6 +443,7 @@ async function buildDashboardData() {
       mode,
       sourceFile,
       tamarindConfigured,
+      anthropicConfigured,
       running: runningState.running,
       pid: runningState.pid,
       logFile: "results/pipeline.log",
@@ -494,6 +490,15 @@ export async function POST(request: Request) {
         { status: 400 }
       );
     }
+    if (!process.env.ANTHROPIC_API_KEY) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "ANTHROPIC_API_KEY is missing. Set env vars before starting real pipeline.",
+        },
+        { status: 400 }
+      );
+    }
 
     const running = await isPipelineRunning();
     if (running.running) {
@@ -508,37 +513,6 @@ export async function POST(request: Request) {
     return NextResponse.json({
       success: true,
       message: `Started real pipeline (pid ${pid})`,
-      ...payload,
-    });
-  }
-
-  if (action === "start_smoke_test") {
-    if (process.env.VERCEL) {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "Background smoke test is disabled on Vercel runtime",
-        },
-        { status: 400 }
-      );
-    }
-
-    const running = await isPipelineRunning();
-    if (running.running) {
-      return NextResponse.json(
-        {
-          success: false,
-          message: `Pipeline already running (pid ${running.pid}). Stop it first.`,
-        },
-        { status: 400 }
-      );
-    }
-
-    const pid = await startBackgroundPython("test_one_round.py");
-    const payload = await buildDashboardData();
-    return NextResponse.json({
-      success: true,
-      message: `Started smoke test (pid ${pid})`,
       ...payload,
     });
   }

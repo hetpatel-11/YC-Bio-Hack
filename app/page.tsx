@@ -18,9 +18,10 @@ type DashboardPayload = {
   paretoData: ParetoPoint[];
   insertionSites: InsertionSite[];
   meta?: {
-    mode: "live" | "mock" | "none";
+    mode: "live" | "none";
     sourceFile: string | null;
     tamarindConfigured: boolean;
+    anthropicConfigured: boolean;
     running: boolean;
     pid: number | null;
     logFile: string;
@@ -70,7 +71,7 @@ export default function DashboardPage() {
   const insertionSites = data?.insertionSites ?? [];
   const meta = data?.meta;
 
-  const runAction = async (action: "refresh" | "start_pipeline" | "start_smoke_test" | "stop_pipeline") => {
+  const runAction = async (action: "refresh" | "start_pipeline" | "stop_pipeline") => {
     setIsActionPending(true);
     setActionMessage(null);
     try {
@@ -139,6 +140,11 @@ export default function DashboardPage() {
                   {meta?.tamarindConfigured ? "configured" : "missing"}
                 </span>
                 {" • "}
+                Claude key:{" "}
+                <span className={meta?.anthropicConfigured ? "text-accent" : "text-destructive"}>
+                  {meta?.anthropicConfigured ? "configured" : "missing"}
+                </span>
+                {" • "}
                 Process:{" "}
                 <span className={meta?.running ? "text-accent" : "text-muted-foreground"}>
                   {meta?.running ? `running (pid ${meta.pid})` : "stopped"}
@@ -154,18 +160,11 @@ export default function DashboardPage() {
                 Refresh
               </button>
               <button
-                onClick={() => runAction("start_smoke_test")}
-                disabled={isActionPending || Boolean(meta?.running)}
-                className="px-3 py-1.5 text-xs rounded-md border border-border hover:bg-secondary disabled:opacity-50"
-              >
-                Run Smoke Test
-              </button>
-              <button
                 onClick={() => runAction("start_pipeline")}
                 disabled={isActionPending || Boolean(meta?.running)}
                 className="px-3 py-1.5 text-xs rounded-md border border-primary/40 text-primary hover:bg-primary/10 disabled:opacity-50"
               >
-                Start Real Pipeline
+                Start Pipeline
               </button>
               <button
                 onClick={() => runAction("stop_pipeline")}
