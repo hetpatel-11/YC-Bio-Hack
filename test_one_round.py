@@ -22,7 +22,12 @@ from analysis.pareto import pareto_front, plot_pareto
 # Config (minimal for fast iteration)
 # ---------------------------------------------------------------------------
 FP_NAME = "cpGFP"
-LINKER  = "GGSGGS"
+FP_SEQUENCE = (
+    "MTTFKIESRIHGNLNGEKFELVGGGVGEEGRLEIEMKTKDKPLAFSPFLLSHCMGYGFYH"
+    "FASFPKGTKNIYLHAATNGGYTNTRKEIYEDGGILEVNFRYTYEFNKIIGDVECIGHGFP"
+    "SQSPIFKDTIVKSCPTVDLMLPMSGNIIASSYARAFQLKDGSFYTAEVKNNIDFKNPIHE"
+    "SFSKSGPMFTHRRVEETHTKENLAMVEYQQVFNSAPRDM"
+)
 POP     = 10
 GENS    = 5
 TOP_K   = 5
@@ -69,9 +74,9 @@ def main():
     # --- GA ---
     print(f"\n[GA] {POP} pop × {GENS} gen → top {TOP_K}")
     top_individuals = run_ga(
-        seed_sequences=[SSTR2_WILDTYPE],
+        seed_receptor=SSTR2_WILDTYPE,
+        fp_sequence=FP_SEQUENCE,
         fp_name=FP_NAME,
-        linker=LINKER,
         population_size=POP,
         n_generations=GENS,
         top_k=TOP_K,
@@ -101,8 +106,8 @@ def main():
     print(f"\n[AF2] Running multimer on top {TOP_K_AF2} (mock)")
     af2_results = []
     for seq in top_seqs:
-        r = mock_af2([seq, FP_NAME])
-        af2_results.append({"chains": [seq, FP_NAME], **r})
+        r = mock_af2([seq, FP_SEQUENCE])
+        af2_results.append({"chains": [seq, FP_SEQUENCE], **r})
         print(f"  pLDDT={r['plddt']:.1f}  ptm={r['ptm']:.3f}  iptm={r['iptm']:.3f}")
 
     # --- RMSD vs WT PDB (same fake PDB → RMSD=0) ---
