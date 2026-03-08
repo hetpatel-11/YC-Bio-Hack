@@ -28,8 +28,18 @@ AF2 multimer:
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
+
+# Load .env so API keys are available when spawned by Next.js or run directly
+_env_file = Path(__file__).parent / ".env"
+if _env_file.exists():
+    for _line in _env_file.read_text().splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith("#") and "=" in _line:
+            _k, _, _v = _line.partition("=")
+            os.environ.setdefault(_k.strip(), _v.strip())
 
 
 def _load_ligands(fasta_path: str | Path) -> list[tuple[str, str]]:
@@ -203,8 +213,14 @@ def main():
     # Save ESMFold results
     # -----------------------------------------------------------------------
     esmfold_results_path = "results/esmfold_results.json"
+    # Include pdb_file path so the dashboard and run_af2.py can locate structures
+    from scorers.tamarind import _load_cache as _tc, _cache_key as _ck
+    _tamarind_cache = _tc()
+    def _pdb_file_for(seq: str) -> str:
+        entry = _tamarind_cache.get(_ck("esmfold", seq), {})
+        return entry.get("pdb_file", "")
     esmfold_summary = [
-        {"sequence": seq, "plddt": plddt}
+        {"sequence": seq, "plddt": plddt, "pdb_file": _pdb_file_for(seq)}
         for seq, plddt in sorted(plddt_cache.items(), key=lambda x: x[1], reverse=True)
     ]
     Path(esmfold_results_path).parent.mkdir(parents=True, exist_ok=True)
@@ -221,8 +237,11 @@ def main():
     af2_shortlist_path = "results/af2_shortlist.json"
     if Path(af2_shortlist_path).exists():
         shortlist = json.loads(Path(af2_shortlist_path).read_text())
-        top5_sequences = [c["sequence"] for c in shortlist.get("candidates", [])]
+        top5_sequences = [c["sequence"] for c in shortlist.get("candidates", []) if c.get("sequence")]
     else:
+        top5_sequences = []
+    if not top5_sequences:
+        # Agent didn't write shortlist — fall back to pLDDT ranking
         top5_sequences = [seq for seq, _ in
                           sorted(plddt_cache.items(), key=lambda x: x[1], reverse=True)[:TOP_K_AF2]]
 
