@@ -27,43 +27,88 @@ export function ProteinViewer({ candidate }: ProteinViewerProps) {
     const centerX = width / 2;
     const centerY = height / 2;
 
-    // Generate a procedural protein-like structure based on sequence
-    const generateStructure = (sequence: string) => {
+    // Seeded pseudo-random for deterministic per-candidate variation
+    const seededRand = (seed: number) => {
+      let s = seed;
+      return () => {
+        s = (s * 1664525 + 1013904223) & 0xffffffff;
+        return (s >>> 0) / 0xffffffff;
+      };
+    };
+    const seedVal = (candidate?.sequence || "ACDEF")
+      .split("")
+      .reduce((a, c) => a + c.charCodeAt(0), 0);
+    const rand = seededRand(seedVal);
+
+    // Build a zigzag accordion structure:
+    // N helices that tilt alternately left/right, connected by short loops
+    const generateStructure = (_sequence: string) => {
       const points: Array<{ x: number; y: number; z: number; type: string }> = [];
-      const length = Math.min(sequence?.length || 100, 150);
-      
-      let x = 0, y = 0, z = 0;
-      let angle = 0;
-      let helixPhase = 0;
-      
-      for (let i = 0; i < length; i++) {
-        // Simulate secondary structure (helix, sheet, coil)
-        const structureType = i % 20 < 8 ? "helix" : i % 20 < 14 ? "sheet" : "coil";
-        
-        if (structureType === "helix") {
-          // Alpha helix pattern
-          const helixRadius = 8;
-          const helixPitch = 3;
-          x = helixRadius * Math.cos(helixPhase);
-          y += helixPitch;
-          z = helixRadius * Math.sin(helixPhase);
-          helixPhase += 0.6;
-        } else if (structureType === "sheet") {
-          // Beta sheet - more linear with zigzag
-          x += Math.sin(angle) * 6;
-          y += 4;
-          z += Math.cos(angle) * 2;
-          angle += 0.3;
-        } else {
-          // Random coil
-          x += (Math.random() - 0.5) * 10;
-          y += 3 + Math.random() * 2;
-          z += (Math.random() - 0.5) * 10;
+
+      const NUM_HELICES = 7;          // 7-TM GPCR-like bundle
+      const HELIX_RESIDUES = 18;      // residues per helix
+      const LOOP_RESIDUES = 5;        // residues per connecting loop
+      const HELIX_RADIUS = 5;         // coil radius of alpha helix
+      const HELIX_PITCH = 3.2;        // rise per residue along helix axis
+      const TILT = 0.38;              // radians: alternating tilt left/right
+      const BUNDLE_SPREAD = 14;       // lateral spread between helices in bundle
+
+      // Y centres for each helix (evenly spaced going up)
+      const totalHeight = NUM_HELICES * HELIX_RESIDUES * HELIX_PITCH * 0.5;
+
+      for (let h = 0; h < NUM_HELICES; h++) {
+        const tiltDir = h % 2 === 0 ? 1 : -1;           // alternating tilt
+        const xOffset = (h - (NUM_HELICES - 1) / 2) * BUNDLE_SPREAD * 0.6;
+        const zOffset = (rand() - 0.5) * 8;
+
+        // Helix axis direction (tilted in XY plane)
+        const axisX = Math.sin(TILT * tiltDir);
+        const axisY = Math.cos(TILT);
+        const axisZ = 0.15 * tiltDir;                     // slight depth tilt
+
+        // Start Y: distribute helices evenly across vertical range
+        const startY = -totalHeight * 0.5 + h * (totalHeight / NUM_HELICES);
+
+        // Draw helix residues
+        for (let r = 0; r < HELIX_RESIDUES; r++) {
+          const t = r / HELIX_RESIDUES;
+          const along = r * HELIX_PITCH * 0.5;             // progress along axis
+          const phase = r * 0.6 + h * 1.1;                // helix coil phase
+          // Helix cross-section (perpendicular to axis)
+          const perpX = Math.cos(phase) * HELIX_RADIUS;
+          const perpZ = Math.sin(phase) * HELIX_RADIUS;
+
+          points.push({
+            x: xOffset + axisX * along + perpX,
+            y: startY + axisY * along,
+            z: zOffset + axisZ * along + perpZ,
+            type: "helix",
+          });
+          void t;
         }
-        
-        points.push({ x, y: y - length * 1.5, z, type: structureType });
+
+        // Connecting loop to next helix (skip after last)
+        if (h < NUM_HELICES - 1) {
+          const loopEndX = ((h + 1) - (NUM_HELICES - 1) / 2) * BUNDLE_SPREAD * 0.6;
+          const loopEndZ = (rand() - 0.5) * 8;
+          const loopStartY = startY + axisY * HELIX_RESIDUES * HELIX_PITCH * 0.5;
+          const nextStartY = -totalHeight * 0.5 + (h + 1) * (totalHeight / NUM_HELICES);
+          // Bulge outward for extracellular / intracellular loops
+          const bulge = (h % 2 === 0 ? 1 : -1) * (8 + rand() * 6);
+
+          for (let l = 0; l < LOOP_RESIDUES; l++) {
+            const lt = (l + 1) / (LOOP_RESIDUES + 1);
+            const bx = bulge * Math.sin(lt * Math.PI);
+            points.push({
+              x: xOffset + (loopEndX - xOffset) * lt + bx,
+              y: loopStartY + (nextStartY - loopStartY) * lt,
+              z: zOffset + (loopEndZ - zOffset) * lt,
+              type: "coil",
+            });
+          }
+        }
       }
-      
+
       return points;
     };
 
@@ -120,8 +165,6 @@ export function ProteinViewer({ candidate }: ProteinViewerProps) {
         let color: string;
         if (structure[idx].type === "helix") {
           color = `rgba(45, 212, 191, ${0.4 + curr.scale * 0.2})`; // Teal for helix
-        } else if (structure[idx].type === "sheet") {
-          color = `rgba(250, 204, 21, ${0.4 + curr.scale * 0.2})`; // Yellow for sheet
         } else {
           color = `rgba(148, 163, 184, ${0.3 + curr.scale * 0.15})`; // Gray for coil
         }
@@ -177,15 +220,10 @@ export function ProteinViewer({ candidate }: ProteinViewerProps) {
       ctx.fillStyle = "#94a3b8";
       ctx.fillText("Helix", 26, height - 25);
       
-      ctx.fillStyle = "#facc15";
-      ctx.fillRect(60, height - 35, 12, 12);
-      ctx.fillStyle = "#94a3b8";
-      ctx.fillText("Sheet", 76, height - 25);
-      
       ctx.fillStyle = "#64748b";
-      ctx.fillRect(115, height - 35, 12, 12);
+      ctx.fillRect(70, height - 35, 12, 12);
       ctx.fillStyle = "#94a3b8";
-      ctx.fillText("Coil", 131, height - 25);
+      ctx.fillText("Loop", 86, height - 25);
       
       if (candidate?.insertionPosition) {
         ctx.fillStyle = "#22d3ee";
