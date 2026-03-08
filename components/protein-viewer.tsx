@@ -69,68 +69,168 @@ export function ProteinViewer({ candidate }: ProteinViewerProps) {
 
     const structure = generateStructure(candidate?.sequence || "");
     
+    // Helper: project a single 3D point at a given animation time
+    const project = (p: { x: number; y: number; z: number }, rotX: number, rotY: number) => {
+      const x1 = p.x * Math.cos(rotY) - p.z * Math.sin(rotY);
+      const z1 = p.x * Math.sin(rotY) + p.z * Math.cos(rotY);
+      const y1 = p.y * Math.cos(rotX) - z1 * Math.sin(rotX);
+      const z2 = p.y * Math.sin(rotX) + z1 * Math.cos(rotX);
+      const sc = (300 * zoom) / (300 + z2);
+      return { x: centerX + x1 * sc, y: centerY + y1 * sc, z: z2, scale: sc };
+    };
+
+    // Draw a ribbon segment between two projected points with a given half-width
+    const drawRibbonSegment = (
+      ax: number, ay: number,
+      bx: number, by: number,
+      halfW: number,
+      fillColor: string,
+      strokeColor: string,
+      alpha: number
+    ) => {
+      const dx = bx - ax;
+      const dy = by - ay;
+      const len = Math.sqrt(dx * dx + dy * dy) || 1;
+      const nx = (-dy / len) * halfW;
+      const ny = (dx / len) * halfW;
+      ctx.globalAlpha = alpha;
+      ctx.beginPath();
+      ctx.moveTo(ax - nx, ay - ny);
+      ctx.lineTo(ax + nx, ay + ny);
+      ctx.lineTo(bx + nx, by + ny);
+      ctx.lineTo(bx - nx, by - ny);
+      ctx.closePath();
+      ctx.fillStyle = fillColor;
+      ctx.fill();
+      ctx.strokeStyle = strokeColor;
+      ctx.lineWidth = 0.5;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    };
+
+    // Draw an arrowhead for a beta-strand terminus
+    const drawArrowHead = (
+      ax: number, ay: number,
+      bx: number, by: number,
+      halfW: number,
+      fillColor: string,
+      alpha: number
+    ) => {
+      const dx = bx - ax;
+      const dy = by - ay;
+      const len = Math.sqrt(dx * dx + dy * dy) || 1;
+      const nx = (-dy / len) * halfW * 2;
+      const ny = (dx / len) * halfW * 2;
+      ctx.globalAlpha = alpha;
+      ctx.beginPath();
+      ctx.moveTo(bx, by);
+      ctx.lineTo(ax + nx, ay + ny);
+      ctx.lineTo(ax - nx, ay - ny);
+      ctx.closePath();
+      ctx.fillStyle = fillColor;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    };
+
     const draw = (time: number) => {
       ctx.fillStyle = "rgba(22, 22, 30, 1)";
       ctx.fillRect(0, 0, width, height);
 
-      // Apply rotation
       const rotX = rotation.x;
       const rotY = isAnimating ? rotation.y + time * 0.0005 : rotation.y;
-      
-      // Project 3D points to 2D
-      const projected = structure.map((p) => {
-        // Rotate around Y axis
-        const x1 = p.x * Math.cos(rotY) - p.z * Math.sin(rotY);
-        const z1 = p.x * Math.sin(rotY) + p.z * Math.cos(rotY);
-        
-        // Rotate around X axis
-        const y1 = p.y * Math.cos(rotX) - z1 * Math.sin(rotX);
-        const z2 = p.y * Math.sin(rotX) + z1 * Math.cos(rotX);
-        
-        // Perspective projection
-        const scale = (300 * zoom) / (300 + z2);
-        
-        return {
-          x: centerX + x1 * scale,
-          y: centerY + y1 * scale,
-          z: z2,
-          type: p.type,
-          scale,
-        };
-      });
 
-      // Sort by z-depth for proper rendering
-      const sortedIndices = projected
-        .map((_, i) => i)
-        .sort((a, b) => projected[b].z - projected[a].z);
+      // Project all points
+      const projected = structure.map((p) => project(p, rotX, rotY));
 
-      // Draw connections (backbone)
-      ctx.lineWidth = 3 * zoom;
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-      
-      for (let i = 1; i < sortedIndices.length; i++) {
-        const idx = sortedIndices[i];
-        if (idx === 0) continue;
-        
-        const curr = projected[idx];
-        const prev = projected[idx - 1];
-        
-        // Color based on structure type
-        let color: string;
-        if (structure[idx].type === "helix") {
-          color = `rgba(45, 212, 191, ${0.4 + curr.scale * 0.2})`; // Teal for helix
-        } else if (structure[idx].type === "sheet") {
-          color = `rgba(250, 204, 21, ${0.4 + curr.scale * 0.2})`; // Yellow for sheet
-        } else {
-          color = `rgba(148, 163, 184, ${0.3 + curr.scale * 0.15})`; // Gray for coil
+      // Collect segments grouped by run of same type, sorted by average z
+      type Segment = {
+        type: string;
+        indices: number[];
+        avgZ: number;
+      };
+      const segments: Segment[] = [];
+      let i = 0;
+      while (i < structure.length) {
+        const t = structure[i].type;
+        const run: number[] = [i];
+        let j = i + 1;
+        while (j < structure.length && structure[j].type === t) {
+          run.push(j);
+          j++;
         }
-        
-        ctx.strokeStyle = color;
-        ctx.beginPath();
-        ctx.moveTo(prev.x, prev.y);
-        ctx.lineTo(curr.x, curr.y);
-        ctx.stroke();
+        const avgZ = run.reduce((s, k) => s + projected[k].z, 0) / run.length;
+        segments.push({ type: t, indices: run, avgZ });
+        i = j;
+      }
+
+      // Sort segments back-to-front
+      segments.sort((a, b) => b.avgZ - a.avgZ);
+
+      for (const seg of segments) {
+        const { type, indices } = seg;
+
+        if (type === "coil") {
+          // Thin tube line for coil
+          ctx.lineCap = "round";
+          ctx.lineJoin = "round";
+          for (let k = 1; k < indices.length; k++) {
+            const prev = projected[indices[k - 1]];
+            const curr = projected[indices[k]];
+            const depthAlpha = Math.min(1, 0.5 + curr.scale * 0.3);
+            ctx.globalAlpha = depthAlpha;
+            ctx.strokeStyle = `rgba(148, 163, 184, 0.9)`;
+            ctx.lineWidth = Math.max(1, 2 * curr.scale * zoom);
+            ctx.beginPath();
+            ctx.moveTo(prev.x, prev.y);
+            ctx.lineTo(curr.x, curr.y);
+            ctx.stroke();
+            ctx.globalAlpha = 1;
+          }
+        } else if (type === "helix") {
+          // Ribbon helix: alternating thick ribbon slices to simulate a coiled appearance
+          const ribbonHalfW = 7 * zoom;
+          for (let k = 1; k < indices.length; k++) {
+            const prev = projected[indices[k - 1]];
+            const curr = projected[indices[k]];
+            const depthAlpha = Math.min(1, 0.55 + curr.scale * 0.25);
+            // Alternate darker/lighter to give the coil cross-hatch feel
+            const shade = k % 2 === 0 ? "rgba(45, 212, 191, 1)" : "rgba(20, 160, 140, 1)";
+            const stroke = "rgba(10, 100, 90, 0.8)";
+            drawRibbonSegment(
+              prev.x, prev.y, curr.x, curr.y,
+              ribbonHalfW * (0.7 + 0.3 * Math.abs(Math.sin(k * 0.9))),
+              shade, stroke, depthAlpha
+            );
+          }
+        } else if (type === "sheet") {
+          // Flat ribbon for beta-sheet body, arrow at the end
+          const ribbonHalfW = 6 * zoom;
+          for (let k = 1; k < indices.length - 1; k++) {
+            const prev = projected[indices[k - 1]];
+            const curr = projected[indices[k]];
+            const depthAlpha = Math.min(1, 0.55 + curr.scale * 0.25);
+            drawRibbonSegment(
+              prev.x, prev.y, curr.x, curr.y,
+              ribbonHalfW,
+              "rgba(250, 204, 21, 1)",
+              "rgba(180, 140, 10, 0.8)",
+              depthAlpha
+            );
+          }
+          // Arrow tip at final segment
+          if (indices.length >= 2) {
+            const lastIdx = indices.length - 1;
+            const prev = projected[indices[lastIdx - 1]];
+            const curr = projected[indices[lastIdx]];
+            const depthAlpha = Math.min(1, 0.55 + curr.scale * 0.25);
+            drawArrowHead(
+              prev.x, prev.y, curr.x, curr.y,
+              ribbonHalfW,
+              "rgba(250, 204, 21, 1)",
+              depthAlpha
+            );
+          }
+        }
       }
 
       // Draw FP insertion site highlight
@@ -141,25 +241,17 @@ export function ProteinViewer({ candidate }: ProteinViewerProps) {
         );
         const insertPoint = projected[insertIdx];
         if (insertPoint) {
-          // Glow effect
           const gradient = ctx.createRadialGradient(
-            insertPoint.x,
-            insertPoint.y,
-            0,
-            insertPoint.x,
-            insertPoint.y,
-            20 * insertPoint.scale
+            insertPoint.x, insertPoint.y, 0,
+            insertPoint.x, insertPoint.y, 20 * insertPoint.scale
           );
           gradient.addColorStop(0, "rgba(34, 211, 238, 0.8)");
           gradient.addColorStop(0.5, "rgba(34, 211, 238, 0.3)");
           gradient.addColorStop(1, "rgba(34, 211, 238, 0)");
-          
           ctx.fillStyle = gradient;
           ctx.beginPath();
           ctx.arc(insertPoint.x, insertPoint.y, 20 * insertPoint.scale, 0, Math.PI * 2);
           ctx.fill();
-          
-          // Core point
           ctx.fillStyle = "#22d3ee";
           ctx.beginPath();
           ctx.arc(insertPoint.x, insertPoint.y, 6 * insertPoint.scale, 0, Math.PI * 2);
@@ -171,22 +263,22 @@ export function ProteinViewer({ candidate }: ProteinViewerProps) {
       ctx.font = "10px system-ui";
       ctx.fillStyle = "#94a3b8";
       ctx.fillText("Structure:", 10, height - 45);
-      
+
       ctx.fillStyle = "#2dd4bf";
       ctx.fillRect(10, height - 35, 12, 12);
       ctx.fillStyle = "#94a3b8";
       ctx.fillText("Helix", 26, height - 25);
-      
+
       ctx.fillStyle = "#facc15";
       ctx.fillRect(60, height - 35, 12, 12);
       ctx.fillStyle = "#94a3b8";
       ctx.fillText("Sheet", 76, height - 25);
-      
+
       ctx.fillStyle = "#64748b";
       ctx.fillRect(115, height - 35, 12, 12);
       ctx.fillStyle = "#94a3b8";
       ctx.fillText("Coil", 131, height - 25);
-      
+
       if (candidate?.insertionPosition) {
         ctx.fillStyle = "#22d3ee";
         ctx.beginPath();
