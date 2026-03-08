@@ -27,6 +27,7 @@ const LOG_FILE = path.join(RESULTS_DIR, "pipeline.log");
 const CANDIDATE_FILES = [
   "af2_results.json",
   "top5.json",
+  "esmfold_results.json",
 ];
 const KNOWN_LINKERS = ["GGSGGS", "GSGSGS", "GGGGS", "GS"];
 const FALLBACK_INSERTION_POSITIONS = [84, 121, 161, 228, 284];
@@ -143,7 +144,7 @@ function firstString(values: unknown[]): string | null {
 
 function deriveInsertionPosition(raw: RawCandidate, sequence: string, index: number) {
   const explicit = toNumber(
-    raw.insertionPosition ?? raw.insertion_position ?? raw.insert_position
+    raw.insertionPosition ?? raw.insertion_position ?? raw.insert_position ?? raw.insert_pos
   );
   if (explicit !== null && explicit > 0) return Math.round(explicit);
 
@@ -420,7 +421,9 @@ async function buildDashboardData() {
     const iptm = toUnit(raw.iptm);
     const ptm = toUnit(raw.ptm);
     const fpName = firstString([raw.fp_name, raw.fpName]) ?? "cpGFP";
-    const linker = firstString([raw.linker]) ?? "GGSGGS";
+    const linkerN = typeof raw.linker_n === "string" ? raw.linker_n : "";
+    const linkerC = typeof raw.linker_c === "string" ? raw.linker_c : "";
+    const linker = firstString([raw.linker, linkerN || linkerC ? `${linkerN}…${linkerC}` : null]) ?? "GGSGGS";
     const candidateId =
       firstString([raw.id, raw.candidateId, raw.candidate_id]) ??
       `cand-${String(index + 1).padStart(3, "0")}`;
