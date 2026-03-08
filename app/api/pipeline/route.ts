@@ -9,6 +9,14 @@ type RunEvent = {
   phase?: string;
   sequence?: string;
   fitness?: number;
+  insert_pos?: number;
+  linker_n?: string;
+  linker_c?: string;
+  plddt?: number;
+  ptm?: number;
+  iptm?: number;
+  chains?: unknown;
+  [key: string]: unknown;
 };
 type PipelineMode = "live" | "none";
 
@@ -177,13 +185,17 @@ function calculatePareto(candidates: Candidate[]) {
 }
 
 async function readLatestRunEvents() {
-  if (!(await exists(RUNS_DIR))) return [] as RunEvent[];
+  if (!(await exists(RUNS_DIR))) {
+    return { events: [] as RunEvent[], sourceFile: null as string | null };
+  }
 
   const files = (await fs.readdir(RUNS_DIR))
     .filter((name) => name.endsWith(".jsonl"))
     .map((name) => path.join(RUNS_DIR, name));
 
-  if (files.length === 0) return [] as RunEvent[];
+  if (files.length === 0) {
+    return { events: [] as RunEvent[], sourceFile: null as string | null };
+  }
 
   const withStats = await Promise.all(
     files.map(async (filePath) => ({
@@ -208,7 +220,7 @@ async function readLatestRunEvents() {
       continue;
     }
   }
-  return events;
+  return { events, sourceFile: path.basename(latestFile) };
 }
 
 async function readRawCandidates() {
@@ -230,6 +242,75 @@ async function readRawCandidates() {
   }
 
   return { candidates: [] as RawCandidate[], sourceFile: null as string | null };
+}
+
+function shortHash(input: string) {
+  let hash = 0;
+  for (let i = 0; i < input.length; i++) {
+    hash = (hash * 31 + input.charCodeAt(i)) >>> 0;
+  }
+  return hash.toString(36).padStart(7, "0").slice(0, 7);
+}
+
+function buildCandidatesFromRunEvents(runEvents: RunEvent[]): RawCandidate[] {
+  const gaBySequence = new Map<string, RunEvent>();
+  const candidatesBySequence = new Map<string, RawCandidate>();
+
+  for (const event of runEvents) {
+    const phase = typeof event.phase === "string" ? event.phase : "";
+    const chains = Array.isArray(event.chains) ? event.chains : [];
+    const sequence = firstString([event.sequence, chains[0]]);
+    if (!sequence) continue;
+
+    if (phase.startsWith("ga_")) {
+      gaBySequence.set(sequence, event);
+      if (!candidatesBySequence.has(sequence)) {
+        candidatesBySequence.set(sequence, {
+          id: `run-${shortHash(sequence)}`,
+          sequence,
+          fitness: event.fitness,
+          local_fitness: event.fitness,
+          insert_position: event.insert_pos,
+          linker: `${event.linker_n ?? ""}${event.linker_c ?? ""}`,
+          fp_name: "cpGFP",
+        });
+      }
+      continue;
+    }
+
+    const ga = gaBySequence.get(sequence);
+    const previous = candidatesBySequence.get(sequence) ?? {};
+    const merged: RawCandidate = {
+      ...previous,
+      id: firstString([previous.id, `run-${shortHash(sequence)}`]),
+      sequence,
+      fp_name: firstString([event.fp_name, previous.fp_name, "cpGFP"]),
+      fitness: toNumber(ga?.fitness) ?? toNumber(previous.fitness),
+      local_fitness:
+        toNumber(event.local_fitness) ??
+        toNumber(ga?.fitness) ??
+        toNumber(previous.local_fitness) ??
+        toNumber(previous.fitness),
+      insert_position:
+        toNumber(event.insert_pos) ??
+        toNumber(ga?.insert_pos) ??
+        toNumber(previous.insert_position),
+      linker:
+        firstString([
+          event.linker,
+          `${ga?.linker_n ?? ""}${ga?.linker_c ?? ""}`,
+          previous.linker,
+        ]) ?? "GGSGGS",
+      plddt: toNumber(event.plddt) ?? toNumber(previous.plddt),
+      ptm: toNumber(event.ptm) ?? toNumber(previous.ptm),
+      iptm: toNumber(event.iptm) ?? toNumber(previous.iptm),
+      chains: chains.length > 0 ? chains : previous.chains,
+      pdb_file: firstString([event.pdb_file, previous.pdb_file]),
+    };
+    candidatesBySequence.set(sequence, merged);
+  }
+
+  return [...candidatesBySequence.values()];
 }
 
 function candidateSortValue(candidate: Candidate) {
@@ -283,7 +364,13 @@ function buildInsertionSites(candidates: Candidate[]): InsertionSite[] {
 }
 
 async function buildDashboardData() {
-  const [{ candidates: rawCandidates, sourceFile }, runEvents, callCounter, esmfoldSummary, runningState] =
+  const [
+    { candidates: fileCandidates, sourceFile: fileSource },
+    latestRun,
+    callCounter,
+    esmfoldSummary,
+    runningState,
+  ] =
     await Promise.all([
       readRawCandidates(),
       readLatestRunEvents(),
@@ -293,6 +380,18 @@ async function buildDashboardData() {
       ),
       isPipelineRunning(),
     ]);
+
+  const runEvents = latestRun.events;
+  const fallbackCandidates = fileCandidates.length === 0
+    ? buildCandidatesFromRunEvents(runEvents)
+    : [];
+  const rawCandidates = fileCandidates.length > 0 ? fileCandidates : fallbackCandidates;
+  const sourceFile =
+    fileCandidates.length > 0
+      ? fileSource
+      : fallbackCandidates.length > 0 && latestRun.sourceFile
+      ? `runs/${latestRun.sourceFile}`
+      : null;
 
   const candidatesBase = rawCandidates.map((raw, index) => {
     const chains = Array.isArray(raw.chains) ? raw.chains : [];
