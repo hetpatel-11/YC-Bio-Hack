@@ -10,7 +10,11 @@ Replace with a trained MLP if time allows.
 
 # Brightness values (relative units) sourced from FPbase.
 # Higher = brighter. Normalized to [0, 1] relative to mVenus.
+# cpGFP (cp145): brightness ~0.72 relative to mVenus. Key advantage for this
+# project: fluorescence responds to conformational changes at the insertion
+# site, making it ideal for SSTR2-based biosensors.
 FP_BRIGHTNESS = {
+    "cpGFP":   0.72,   # cp145 — primary FP for this project
     "GFP":     0.67,
     "mCherry": 0.47,
     "mVenus":  1.00,

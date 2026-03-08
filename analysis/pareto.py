@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Pareto front computation and plotting.
 

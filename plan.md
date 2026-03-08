@@ -132,12 +132,14 @@ Design an **optimal transmembrane receptor sensor** for drug delivery by finding
 
 ```python
 CONSTRAINTS = {
-    "receptor":     "fixed backbone, mutable surface loops only",
-    "linker":       "5–20 AA, flexible (GGS repeats as baseline)",
-    "fp_candidate": ["GFP", "mCherry", "mVenus"],   # treat as fixed modules
-    "fp_insertion": "loop regions only (avoid TM helices)",
-    "max_length":   800,   # AA — well within Tamarind limits
-    "forbidden":    ["cysteine-rich motifs", "signal peptides"],
+    "receptor":      "SSTR2 (NP_001041.1, 369 AA, 7 TM helices) — TM helices fixed, loops mutable",
+    "mutable_loops": ["ECL1 (83–89)", "ICL2 (117–124)", "ECL2 (149–173)",
+                      "ICL3 (205–252)", "ECL3 (281–287)", "C-tail (314–369)"],
+    "fp":            "cpGFP cp145 variant (219 AA) — fixed module, not mutated",
+    "linker":        "5–20 AA, flexible (GGS repeats as baseline)",
+    "fp_insertion":  "ECL2 / ICL3 / ECL3 preferred (extracellular access + conformational coupling)",
+    "max_length":    800,  # SSTR2 (369) + 2×linker (12) + cpGFP (219) ≈ 600 AA
+    "forbidden":     ["cysteine-rich motifs", "signal peptides"],
 }
 ```
 
