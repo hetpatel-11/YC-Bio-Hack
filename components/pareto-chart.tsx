@@ -25,6 +25,26 @@ export function ParetoChart({ data, selectedId, onSelect }: ParetoChartProps) {
   // Sort front points for line connection
   const sortedFront = [...frontPoints].sort((a, b) => a.plddt - b.plddt);
 
+  // Auto-scale axes with 10% padding around data range
+  const plddtValues = data.map((p) => p.plddt);
+  const iptmValues = data.map((p) => p.iptm);
+  const xDomain: [number, number] = data.length
+    ? (() => {
+        const min = Math.min(...plddtValues);
+        const max = Math.max(...plddtValues);
+        const pad = (max - min) * 0.1 || 0.05;
+        return [Math.max(0, min - pad), Math.min(1, max + pad)];
+      })()
+    : [0, 1];
+  const yDomain: [number, number] = data.length
+    ? (() => {
+        const min = Math.min(...iptmValues);
+        const max = Math.max(...iptmValues);
+        const pad = (max - min) * 0.1 || 0.05;
+        return [Math.max(0, min - pad), Math.min(1, max + pad)];
+      })()
+    : [0, 1];
+
   return (
     <div className="bg-card border border-border rounded-lg p-4">
       <div className="mb-4">
@@ -47,7 +67,7 @@ export function ParetoChart({ data, selectedId, onSelect }: ParetoChartProps) {
               type="number"
               dataKey="plddt"
               name="pLDDT"
-              domain={[0.6, 1]}
+              domain={xDomain}
               tick={{ fontSize: 10, fill: "var(--color-muted-foreground)" }}
               axisLine={{ stroke: "var(--color-border)" }}
               tickLine={{ stroke: "var(--color-border)" }}
@@ -63,7 +83,7 @@ export function ParetoChart({ data, selectedId, onSelect }: ParetoChartProps) {
               type="number"
               dataKey="iptm"
               name="ipTM"
-              domain={[0.6, 1]}
+              domain={yDomain}
               tick={{ fontSize: 10, fill: "var(--color-muted-foreground)" }}
               axisLine={{ stroke: "var(--color-border)" }}
               tickLine={{ stroke: "var(--color-border)" }}
