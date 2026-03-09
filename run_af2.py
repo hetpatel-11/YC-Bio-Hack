@@ -30,6 +30,7 @@ from analysis.pareto import pareto_front, plot_pareto
 from analysis.rmsd import batch_rmsd
 from scorers.ensemble import final_score, tamarind_complex_batch
 from scorers.tamarind import esmfold_plddt, remaining_calls
+from validation.orthogonal import estimate_validation_score, load_validation_scores
 
 # ── config ───────────────────────────────────────────────────────────────────
 
@@ -102,6 +103,7 @@ def _run():
         print(f"  pLDDT={c.get('plddt', '?'):.1f}  seq={c['sequence'][:30]}...")
 
     plddt_cache = {c["sequence"]: c.get("plddt", 0) for c in candidates}
+    validation_scores = load_validation_scores()
 
     # ── WT baseline (cached) ─────────────────────────────────────────────────
     _wt_linker = "GGSGGS"
@@ -160,6 +162,10 @@ def _run():
         r["sequence"]      = seq
         r["plddt"]         = r.get("plddt") or plddt_cache.get(seq)
         r["local_fitness"] = local_map.get(seq, 0)
+        validation_score = validation_scores.get(seq)
+        if validation_score is None:
+            validation_score = estimate_validation_score(seq)["validation_score"]
+        r["orthogonal_validation"] = validation_score
         r["final_score"]   = final_score(r)
         print(f"  {seq[:25]}... pLDDT={r.get('plddt')}  ipTM={r.get('iptm')}  "
               f"final={r.get('final_score', 0):.3f}")

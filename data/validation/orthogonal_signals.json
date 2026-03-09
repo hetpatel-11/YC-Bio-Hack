@@ -1,0 +1,51 @@
+{
+  "md_windows": [
+    {
+      "name": "ICL3 hinge (206-216)",
+      "start": 206,
+      "end": 216,
+      "stability_score": 0.45,
+      "ligand_contact": 0.32,
+      "notes": "MD snapshots show the cpGFP barrel shearing against TM4 if the insertion starts too close to residue 206."
+    },
+    {
+      "name": "ICL3 mid-loop (217-235)",
+      "start": 217,
+      "end": 235,
+      "stability_score": 0.78,
+      "ligand_contact": 0.68,
+      "notes": "No severe bending in the 200 ns trajectories. Good exposure of the extracellular loops."
+    },
+    {
+      "name": "ICL3 tail (236-248)",
+      "start": 236,
+      "end": 248,
+      "stability_score": 0.61,
+      "ligand_contact": 0.55,
+      "notes": "Coupled motions begin to tug TM5; partial unfolding observed if cpGFP sits past residue 242."
+    }
+  ],
+  "rosetta_filters": [
+    {
+      "name": "proline_pair_clash",
+      "motif": "PP",
+      "penalty": 0.18,
+      "description": "Rosetta interface_ddg rejects constructs whose linkers contain rigid Pro-Pro motifs."
+    },
+    {
+      "name": "lys_cluster_surface",
+      "motif": "KKK",
+      "penalty": 0.12,
+      "description": "Electrostatic filter warns when three or more Lys residues cluster inside ICL3."
+    }
+  ],
+  "assays": [
+    {
+      "label": "HEK293 Ca2+ flux",
+      "sequence_sha1": "d8145138dc931e022854209c51f502e75632ead3",
+      "score": 0.72,
+      "n": 4,
+      "notes": "Legacy cpGFP@228 control — use as an anchor for lab-to-in-silico calibration."
+    }
+  ]
+}

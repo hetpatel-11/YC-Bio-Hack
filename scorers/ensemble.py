@@ -103,7 +103,8 @@ def final_score(candidate: dict) -> float:
     Composite score for final ranking of AF2 results.
     Combines structural metrics from all three phases.
 
-    candidate dict should contain: plddt, iptm, local_fitness, tm_rmsd
+    candidate dict should contain: plddt, iptm, local_fitness, tm_rmsd,
+    and optionally orthogonal_validation (MD/Rosetta/assay blend).
     """
     plddt         = (candidate.get("plddt") or 0) / 100   # normalize to [0,1]
     iptm          = candidate.get("iptm") or 0
@@ -113,9 +114,15 @@ def final_score(candidate: dict) -> float:
     tm_rmsd = candidate.get("tm_rmsd")
     rmsd_score = max(0.0, 1.0 - (tm_rmsd / 5.0)) if tm_rmsd is not None else 0.5
 
+    validation = candidate.get("orthogonal_validation")
+    if validation is None:
+        validation = candidate.get("validation_score")
+    validation = validation if validation is not None else 0.5
+
     return (
-        0.35 * plddt
+        0.30 * plddt
         + 0.30 * iptm
-        + 0.20 * rmsd_score
+        + 0.15 * rmsd_score
         + 0.15 * local_fitness
+        + 0.10 * validation
     )

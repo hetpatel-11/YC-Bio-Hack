@@ -238,15 +238,18 @@ def select_af2_candidates(esmfold_results_path: str, n: int = 5, output_path: st
     """
     prompt = f"""
 ESMFold has returned pLDDT scores for our top candidates. Results are in '{esmfold_results_path}'.
+Orthogonal validation signals (MD windows, Rosetta filters, assays) are saved in 'results/orthogonal_validation.json'.
 
 Please:
 1. Read the ESMFold results.
-2. Select the best {n} candidates to submit to Tamarind AlphaFold2 multimer, prioritising:
+2. Skim the orthogonal validation file to understand which sequences already have MD/assay support.
+3. Select the best {n} candidates to submit to Tamarind AlphaFold2 multimer, prioritising:
    - pLDDT > 70 (confident fold)
    - Diversity (no two sequences > 95% identical)
    - Candidates where FP insertion is in a loop region
-3. Write the selected {n} candidates to '{output_path}'.
-4. Briefly explain why each was chosen.
+   - Orthogonal validation score > 0.55 when available (avoid scores flagged by Rosetta filters)
+4. Write the selected {n} candidates to '{output_path}'.
+5. Briefly explain why each was chosen, referencing any validation signal you used.
 
 AF2 multimer costs ~8 Tamarind credits per candidate ({n} × 8 = ~{n*8} total). Choose wisely.
 """
@@ -258,15 +261,15 @@ def generate_summary(af2_results_path: str, output_path: str = "results/summary.
     Phase 3→Demo: Generate a human-readable summary of the final top-5 candidates.
     """
     prompt = f"""
-AlphaFold2 multimer results are in '{af2_results_path}'.
+AlphaFold2 multimer results are in '{af2_results_path}'. Orthogonal validation signals are in 'results/orthogonal_validation.json'.
 
 Please:
 1. Read the AF2 results.
-2. Rank the candidates by combined score (weight ipTM 40%, pLDDT 40%, local_fitness 20%).
+2. Rank the candidates by combined score (ipTM 30%, pLDDT 30%, TM RMSD 15%, local_fitness 15%, orthogonal validation 10%) and mention how validation signals modulate confidence.
 3. Write a short Markdown summary to '{output_path}' with:
    - A one-paragraph executive summary of the best candidate
    - A table of all 5 candidates with their key metrics
-   - A brief note on what makes the top candidate promising for drug delivery
+   - A brief note on what makes the top candidate promising for drug delivery, referencing any MD/Rosetta/assay support
 4. Return the summary text.
 """
     return run_agent(prompt)

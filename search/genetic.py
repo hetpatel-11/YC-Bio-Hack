@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 
 from scorers.ensemble import local_score
 from scorers.fp_model import brightness_score
+from validation.orthogonal import estimate_validation_score
 
 AMINO_ACIDS = "ACDEFGHIKLMNPQRSTVWY"
 
@@ -47,6 +48,7 @@ _BARE_LOOP_POSITIONS: list[int] = (
 
 LOCAL_WEIGHT = 0.35
 PLDDT_WEIGHT = 0.65
+ORTHOGONAL_WEIGHT = 0.15  # blended in only when validation signals exist
 
 
 # ---------------------------------------------------------------------------
@@ -244,11 +246,22 @@ def evaluate(
 
     if plddt_cache and chimeric in plddt_cache:
         plddt_norm = plddt_cache[chimeric] / 100.0
-        ind.fitness = LOCAL_WEIGHT * combined_local + PLDDT_WEIGHT * plddt_norm
+        base_score = LOCAL_WEIGHT * combined_local + PLDDT_WEIGHT * plddt_norm
         ind.metadata["plddt_used"] = True
     else:
-        ind.fitness = combined_local
+        base_score = combined_local
         ind.metadata["plddt_used"] = False
+
+    validation = estimate_validation_score(
+        chimeric,
+        insert_pos=ind.insert_pos,
+        linker_block=ind.linker_n + ind.linker_c,
+    )
+    ind.metadata["orthogonal_validation"] = validation
+    if validation.get("sources"):
+        base_score = (1 - ORTHOGONAL_WEIGHT) * base_score + ORTHOGONAL_WEIGHT * validation["validation_score"]
+
+    ind.fitness = base_score
 
     ind.metadata["linker_n"] = ind.linker_n
     ind.metadata["linker_c"] = ind.linker_c

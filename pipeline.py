@@ -71,6 +71,7 @@ from analysis.rmsd import batch_rmsd
 from scorers.ensemble import final_score, tamarind_complex_batch, tamarind_score_batch
 from scorers.tamarind import esmfold_plddt, remaining_calls
 from search.genetic import Individual, run_ga
+from validation.orthogonal import estimate_validation_score, write_validation_report
 
 # ---------------------------------------------------------------------------
 # Config
@@ -110,6 +111,7 @@ GA_ROUNDS = [
 ]
 
 TOP_K_AF2 = 5   # final AF2 multimer candidates
+VALIDATION_TOP = 20  # number of unique sequences to annotate with orthogonal signals
 
 RESULTS_DIR = Path("results/runs")
 
@@ -143,6 +145,7 @@ def main():
     plddt_cache: dict[str, float] = {}   # chimeric_sequence → pLDDT
     all_individuals: list[Individual] = []
     seed_survivors: list[Individual] = []   # top Individual objects from prior round
+    orthogonal_scores: dict[str, float] = {}
 
     # -----------------------------------------------------------------------
     # Feedback loop
@@ -210,6 +213,35 @@ def main():
             print(f"  pLDDT={plddt:.1f}  pos={pos}  ln={ln}  lc={lc}")
 
     # -----------------------------------------------------------------------
+    # Orthogonal validation stage (MD / Rosetta / lab assays)
+    # -----------------------------------------------------------------------
+    print("\n=== Orthogonal validation: MD/Rosetta/assay signals ===")
+    unique_by_sequence: dict[str, Individual] = {}
+    for ind in all_individuals:
+        unique_by_sequence.setdefault(ind.sequence, ind)
+
+    ranked_sequences = [seq for seq, _ in sorted(plddt_cache.items(), key=lambda x: x[1], reverse=True)]
+    validation_candidates: list[Individual] = []
+    for seq in ranked_sequences:
+        ind = unique_by_sequence.get(seq)
+        if not ind:
+            continue
+        validation_candidates.append(ind)
+        if len(validation_candidates) >= VALIDATION_TOP:
+            break
+
+    if validation_candidates:
+        summaries = write_validation_report(validation_candidates)
+        orthogonal_scores = {
+            entry["sequence"]: entry.get("validation_score")
+            for entry in summaries
+            if entry.get("sequence")
+        }
+        print(f"[validation] Saved {len(summaries)} entries to results/orthogonal_validation.json")
+    else:
+        print("[validation] No candidates available for orthogonal scoring")
+
+    # -----------------------------------------------------------------------
     # Save ESMFold results
     # -----------------------------------------------------------------------
     esmfold_results_path = "results/esmfold_results.json"
@@ -220,7 +252,12 @@ def main():
         entry = _tamarind_cache.get(_ck("esmfold", seq), {})
         return entry.get("pdb_file", "")
     esmfold_summary = [
-        {"sequence": seq, "plddt": plddt, "pdb_file": _pdb_file_for(seq)}
+        {
+            "sequence": seq,
+            "plddt": plddt,
+            "pdb_file": _pdb_file_for(seq),
+            "validation_score": orthogonal_scores.get(seq),
+        }
         for seq, plddt in sorted(plddt_cache.items(), key=lambda x: x[1], reverse=True)
     ]
     Path(esmfold_results_path).parent.mkdir(parents=True, exist_ok=True)
@@ -273,6 +310,21 @@ def main():
         r["sequence"]      = seq
         r["plddt"]         = r.get("plddt") or plddt_cache.get(seq)
         r["local_fitness"] = local_map.get(seq, 0)
+        validation_score = orthogonal_scores.get(seq)
+        if validation_score is None:
+            ind = unique_by_sequence.get(seq)
+            if ind:
+                linker_block = (ind.linker_n or "") + (ind.linker_c or "")
+                insert_pos = ind.insert_pos
+            else:
+                linker_block = ""
+                insert_pos = None
+            validation_score = estimate_validation_score(
+                seq,
+                insert_pos=insert_pos,
+                linker_block=linker_block,
+            )["validation_score"]
+        r["orthogonal_validation"] = validation_score
         r["final_score"]   = final_score(r)
         log({"phase": "af2", **{k: v for k, v in r.items() if k != "pdb"}})
 

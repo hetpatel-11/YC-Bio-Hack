@@ -13,27 +13,31 @@ The pipeline designs chimeric SSTR2-cpGFP constructs where cpGFP is inserted int
 ## Pipeline Stages
 
 ```
-GA Search (local) → ESMFold Batch → Agent Selection → AF2 Multimer → Ranking + Pareto
+GA Search (local) → ESMFold Batch → Orthogonal Validation → Agent Selection → AF2 Multimer → Ranking + Pareto
 ```
 
 | Stage | Tool | API Calls | Output |
 |-------|------|-----------|--------|
 | 1. Genetic Algorithm | Local (BLOSUM62, topology) | 0 | Top-50 sequences |
 | 2. ESMFold scoring | Tamarind ESMFold | ~50 | pLDDT per candidate |
-| 3. Agent selection | Claude Opus 4.6 | 1 | Top-5 shortlist + rationale |
-| 4. AF2 Multimer | Tamarind AlphaFold2 | ~5 | ipTM (receptor–ligand interface) |
-| 5. Composite ranking | Local | 0 | `af2_results.json`, `top5.json` |
+| 3. Orthogonal validation | Local MD/Rosetta/assay data | 0 | `orthogonal_validation.json` |
+| 4. Agent selection | Claude Opus 4.6 | 1 | Top-5 shortlist + rationale |
+| 5. AF2 Multimer | Tamarind AlphaFold2 | ~5 | ipTM (receptor–ligand interface) |
+| 6. Composite ranking | Local | 0 | `af2_results.json`, `top5.json` |
 
 **API budget:** 95 Tamarind calls total (enforced hard limit).
 
 ### Composite Score
 
 ```
-final_score = 0.35 × (pLDDT/100)
+final_score = 0.30 × (pLDDT/100)
             + 0.30 × ipTM
-            + 0.20 × rmsd_score      # sequence conservation vs WT
+            + 0.15 × rmsd_score      # sequence conservation vs WT
             + 0.15 × local_fitness
+            + 0.10 × validation_score
 ```
+`validation_score` blends MD windows, Rosetta filter hits, and lab assay anchors
+from `data/validation/orthogonal_signals.json`.
 
 ---
 
@@ -130,7 +134,8 @@ Open [http://localhost:3000](http://localhost:3000). The dashboard polls `/api/p
 
 - **No structure required for GA** — all local scorers (BLOSUM62, topology check, cpGFP brightness) run without API calls, enabling thousands of evaluations per second.
 - **Parallel AF2 jobs** — all multimer jobs are submitted simultaneously and polled concurrently, so wall time ≈ single job time.
-- **Claude agent in the loop** — the agent reads ESMFold results, selects diverse candidates (avoiding near-duplicates), and writes a narrative rationale saved alongside results.
+- **Orthogonal validation checkpoint** — MD snapshots, Rosetta filters, and lab assay anchors are blended into `results/orthogonal_validation.json`, nudging both the GA and agent toward constructs supported by independent signals.
+- **Claude agent in the loop** — the agent reads ESMFold + orthogonal signals, selects diverse candidates (avoiding near-duplicates), and writes a narrative rationale saved alongside results.
 - **Cached API calls** — `results/tamarind_cache.json` deduplicates all Tamarind calls by sequence key, so reruns are free.
 
 ---
@@ -144,3 +149,14 @@ Top candidates after AF2 multimer vs somatostatin-28:
 | 1 | 76.05 | 0.62 | 0.527 |
 | 2 | 75.69 | 0.62 | 0.526 |
 | 3 | 63.23 | 0.63 | 0.485 |
+
+---
+
+## Orthogonal validation data
+
+- Authoritative signals live in `data/validation/orthogonal_signals.json`. Update this file
+  with MD-derived stability windows, Rosetta filter motifs, or lab assay hits. Sequences are
+  keyed by SHA1 so sensitive constructs can be referenced without exposing raw sequences.
+- Running `pipeline.py` writes `results/orthogonal_validation.json`, which captures the
+  blended validation score for the top candidates and is consumed by both the agent and the
+  dashboard.
