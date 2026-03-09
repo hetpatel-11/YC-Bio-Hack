@@ -13,7 +13,7 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Drug Discovery Pipeline | Transmembrane Receptor Design",
+  title: "G-Hunter | Transmembrane Receptor Design",
   description:
     "Dashboard for visualizing top protein sequence candidates, Pareto front optimization, and FP insertion site analysis",
 };

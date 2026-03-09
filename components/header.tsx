@@ -12,7 +12,7 @@ export function Header() {
           </div>
           <div>
             <h1 className="text-lg font-semibold text-foreground">
-              Drug Discovery Pipeline
+              G-Hunter
             </h1>
             <p className="text-sm text-muted-foreground">
               Transmembrane Receptor Sensor Design
