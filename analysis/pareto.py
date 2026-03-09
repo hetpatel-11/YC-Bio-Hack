@@ -11,10 +11,16 @@ import json
 from pathlib import Path
 
 
+def _val(candidate: dict, obj: str) -> float:
+    """Return numeric value for objective, defaulting to 0 if None/missing."""
+    v = candidate.get(obj)
+    return float(v) if v is not None else 0.0
+
+
 def is_dominated(a: dict, b: dict, objectives: list[str]) -> bool:
     """Return True if candidate `a` is dominated by `b`."""
-    return all(b[obj] >= a[obj] for obj in objectives) and any(
-        b[obj] > a[obj] for obj in objectives
+    return all(_val(b, obj) >= _val(a, obj) for obj in objectives) and any(
+        _val(b, obj) > _val(a, obj) for obj in objectives
     )
 
 

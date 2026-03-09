@@ -28,7 +28,7 @@ COUNTER_FILE = Path(__file__).parent.parent / "results" / "tamarind_calls.json"
 MAX_CALLS = 95  # hard stop — 5-call buffer below the 100 limit
 
 POLL_INTERVAL = 15   # seconds between status checks
-POLL_TIMEOUT  = 120  # max polls before giving up (~30 min)
+POLL_TIMEOUT  = 360  # max polls before giving up (~90 min)
 
 
 # ---------------------------------------------------------------------------
@@ -219,6 +219,32 @@ def _get_result(job: dict) -> dict:
     return score
 
 
+def _check_existing_job(job_name: str) -> str:
+    """
+    Poll /jobs once (no sleep) to check if job already exists on Tamarind.
+    Returns 'complete', 'running', or 'not_found'.
+    """
+    try:
+        resp = requests.get(f"{BASE_URL}/jobs", headers=_headers(), timeout=30)
+        resp.raise_for_status()
+        body = resp.json()
+        jobs = body if isinstance(body, list) else body.get("jobs", [])
+        job = next(
+            (j for j in jobs if (j.get("JobName") or j.get("jobName")) == job_name),
+            None,
+        )
+        if job is None:
+            return "not_found"
+        status = (job.get("JobStatus") or job.get("status") or "").lower()
+        if status in ("complete", "completed", "done", "finished"):
+            return "complete"
+        if status in ("failed", "error", "stopped"):
+            return "failed"
+        return "running"
+    except Exception:
+        return "not_found"
+
+
 def _run_job(job_name: str, job_type: str, settings: dict) -> dict:
     """Submit, poll, and fetch result in one call."""
     _submit(job_name, job_type, settings)
@@ -326,6 +352,32 @@ def alphafold2_multimer_batch(chain_lists: list[list[str]], num_models: int = 5)
             continue
 
         job_name = f"af2multi_{abs(hash(sequence_key)) % 10**8}"
+        existing_status = _check_existing_job(job_name)
+        if existing_status == "complete":
+            # Job already done on Tamarind — fetch result directly, no resubmission
+            print(f"[tamarind] job '{job_name}' already complete on Tamarind, fetching result")
+            completed = _poll(job_name)  # will return immediately (first poll)
+            result = _get_result(completed)
+            output = {
+                "plddt":    result.get("plddt") or result.get("plddt_mean") or result.get("avg_plddt"),
+                "ptm":      result.get("ptm"),
+                "iptm":     result.get("iptm"),
+                "pdb":      result.get("pdb"),
+                "pdb_file": f"results/pdb/{job_name}.pdb",
+                "seq_hash": job_name,
+                "raw":      result,
+            }
+            results[i] = output
+            with _cache_lock:
+                cache = _load_cache()
+                cache[key] = output
+                _save_cache(cache)
+            continue
+        elif existing_status == "running":
+            print(f"[tamarind] job '{job_name}' already running on Tamarind, skipping resubmit")
+            pending.append((i, job_name, key, sequence_key))
+            continue
+
         settings = {
             "sequence":  sequence_key,
             "numModels": str(num_models),
