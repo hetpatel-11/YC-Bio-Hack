@@ -1,4 +1,4 @@
-# YC-Bio-Hack — SSTR2 Biosensor Design Pipeline
+# YC-Bio-Hack —  Biosensor Design Pipeline
 
 An automated protein engineering pipeline that designs an optimal **SSTR2 GPCR biosensor** by inserting circularly permuted GFP (cpGFP) into the receptor and co-evolving loop residues and linker sequences to maximize folding quality and somatostatin binding.
 
