@@ -198,6 +198,7 @@ export default function DashboardPage() {
             <InsertionDiagram
               sites={insertionSites}
               selectedPosition={selectedCandidate?.insertionPosition || null}
+              selectedCandidate={selectedCandidate}
               onSelectPosition={(pos) => {
                 const match = candidates.find((c) => c.insertionPosition === pos);
                 if (match) setSelectedCandidateId(match.id);
