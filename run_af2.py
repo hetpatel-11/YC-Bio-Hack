@@ -62,10 +62,31 @@ SEED_SEQUENCE = (
 )
 
 ESMFOLD_RESULTS = Path("results/esmfold_results.json")
+PID_FILE = Path("results/pipeline.pid")
 TOP_K = 5
 
 
+def _write_pid():
+    PID_FILE.parent.mkdir(parents=True, exist_ok=True)
+    PID_FILE.write_text(str(os.getpid()))
+
+
+def _clear_pid():
+    try:
+        PID_FILE.unlink()
+    except FileNotFoundError:
+        pass
+
+
 def main():
+    _write_pid()
+    try:
+        _run()
+    finally:
+        _clear_pid()
+
+
+def _run():
     # ── load ESMFold results ─────────────────────────────────────────────────
     if not ESMFOLD_RESULTS.exists():
         raise FileNotFoundError(
