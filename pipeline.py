@@ -246,7 +246,7 @@ def main():
                           sorted(plddt_cache.items(), key=lambda x: x[1], reverse=True)[:TOP_K_AF2]]
 
     # -----------------------------------------------------------------------
-    # AF2 multimer — Chain A: chimeric SSTR2-cpGFP, Chain B: somatostatin
+    # AF2 multimer — Chain A: chimeric SSTR2-cpGFP fused, Chain B: somatostatin
     # ipTM measures how well the chimeric receptor interfaces with the ligand.
     # -----------------------------------------------------------------------
     print(f"\n=== AF2 multimer: {len(top5_sequences)} candidates vs {LIGAND_NAME} ===")
