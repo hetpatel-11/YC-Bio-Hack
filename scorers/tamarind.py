@@ -245,6 +245,23 @@ def _check_existing_job(job_name: str) -> str:
         return "not_found"
 
 
+def _parse_af2_output(result: dict, job_name: str) -> dict:
+    """
+    Normalize Tamarind AF2 multimer result fields to consistent lowercase keys.
+
+    Tamarind returns capitalized/spaced keys: 'Avg pLDDT', 'ipTM', 'pTM'.
+    """
+    return {
+        "plddt":    result.get("Avg pLDDT") or result.get("plddt") or result.get("avg_plddt"),
+        "ptm":      result.get("pTM") or result.get("ptm"),
+        "iptm":     result.get("ipTM") or result.get("iptm"),
+        "pdb":      result.get("pdb"),
+        "pdb_file": f"results/pdb/{job_name}.pdb",
+        "seq_hash": job_name,
+        "raw":      result,
+    }
+
+
 def _run_job(job_name: str, job_type: str, settings: dict) -> dict:
     """Submit, poll, and fetch result in one call."""
     _submit(job_name, job_type, settings)
@@ -309,17 +326,7 @@ def alphafold2_multimer(chains: list[str], num_models: int = 5) -> dict:
     }
     result = _run_job(job_name, "alphafold", settings)
 
-    # AF2 Score fields: plddt, ptm, iptm (verified against Tamarind docs pattern)
-    # PDB fetched from signed S3 ZIP and saved to results/pdb/<job_name>.pdb
-    output = {
-        "plddt":    result.get("plddt") or result.get("plddt_mean") or result.get("avg_plddt"),
-        "ptm":      result.get("ptm"),
-        "iptm":     result.get("iptm"),
-        "pdb":      result.get("pdb"),          # PDB string from ZIP download
-        "pdb_file": f"results/pdb/{job_name}.pdb",
-        "seq_hash": job_name,
-        "raw":      result,
-    }
+    output = _parse_af2_output(result, job_name)
     cache[key] = output
     _save_cache(cache)
     return output
@@ -358,15 +365,7 @@ def alphafold2_multimer_batch(chain_lists: list[list[str]], num_models: int = 5)
             print(f"[tamarind] job '{job_name}' already complete on Tamarind, fetching result")
             completed = _poll(job_name)  # will return immediately (first poll)
             result = _get_result(completed)
-            output = {
-                "plddt":    result.get("plddt") or result.get("plddt_mean") or result.get("avg_plddt"),
-                "ptm":      result.get("ptm"),
-                "iptm":     result.get("iptm"),
-                "pdb":      result.get("pdb"),
-                "pdb_file": f"results/pdb/{job_name}.pdb",
-                "seq_hash": job_name,
-                "raw":      result,
-            }
+            output = _parse_af2_output(result, job_name)
             results[i] = output
             with _cache_lock:
                 cache = _load_cache()
@@ -397,15 +396,7 @@ def alphafold2_multimer_batch(chain_lists: list[list[str]], num_models: int = 5)
         try:
             completed = _poll(job_name)
             result = _get_result(completed)
-            output = {
-                "plddt":    result.get("plddt") or result.get("plddt_mean") or result.get("avg_plddt"),
-                "ptm":      result.get("ptm"),
-                "iptm":     result.get("iptm"),
-                "pdb":      result.get("pdb"),
-                "pdb_file": f"results/pdb/{job_name}.pdb",
-                "seq_hash": job_name,
-                "raw":      result,
-            }
+            output = _parse_af2_output(result, job_name)
             results[i] = output
             with _cache_lock:
                 cache = _load_cache()
