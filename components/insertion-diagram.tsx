@@ -1,10 +1,11 @@
 "use client";
 
-import type { InsertionSite } from "@/lib/types";
+import type { Candidate, InsertionSite } from "@/lib/types";
 
 interface InsertionDiagramProps {
   sites: InsertionSite[];
   selectedPosition: number | null;
+  selectedCandidate?: Candidate | null;
   onSelectPosition?: (position: number) => void;
 }
 
